@@ -1,0 +1,630 @@
+// Cloudflare API service — shared between email-worker and inbox-worker.
+// Credentials are passed per-call (no module-level globals) so this module
+// is safe to use in both Workers and Node.js environments.
+
+import { createLogger } from "./logger.ts";
+
+const log = createLogger("cloudflare");
+
+const CF_BASE = "https://api.cloudflare.com/client/v4";
+
+interface CFResponse<T> {
+	success: boolean;
+	errors: Array<{ code: number; message: string }>;
+	result: T;
+}
+
+export class CloudflareApiError extends Error {
+	code: number | null;
+	path: string;
+	status: number;
+
+	constructor(message: string, opts: { code: number | null; path: string; status: number }) {
+		super(message);
+		this.name = "CloudflareApiError";
+		this.code = opts.code;
+		this.path = opts.path;
+		this.status = opts.status;
+	}
+}
+
+async function cfFetch<T>(path: string, cfApiToken: string, init?: RequestInit): Promise<T> {
+	const res = await fetch(`${CF_BASE}${path}`, {
+		...init,
+		headers: {
+			Authorization: `Bearer ${cfApiToken}`,
+			"Content-Type": "application/json",
+			...(init?.headers ?? {}),
+		},
+	});
+
+	const json = (await res.json()) as CFResponse<T>;
+
+	if (!json.success) {
+		const first = json.errors?.[0];
+		const msg = first?.message ?? "Cloudflare API error";
+		throw new CloudflareApiError(`CF API error: ${msg}`, {
+			code: first?.code ?? null,
+			path,
+			status: res.status,
+		});
+	}
+
+	return json.result;
+}
+
+// ── Zones ────────────────────────────────────────────────────────────────────
+
+export interface CFZone {
+	id: string;
+	name: string;
+	status: string;
+}
+
+export interface DomainCatalogZone {
+	zoneName: string;
+	enabled: boolean;
+	domainId: string | null;
+	sendingName: string | null;
+	sending: "ready" | "pending" | "off";
+	routing: "ready" | "pending" | "unknown";
+	dns: "written" | "manual" | "unknown";
+}
+
+export interface StoredDomainCatalogRow {
+	id: string;
+	name: string;
+	cf_zone_id: string | null;
+	verified: boolean | number | null;
+	routing_status: string | null;
+	dns_status: string | null;
+}
+
+const CATALOG_ZONE_CAP = 25;
+
+function catalogDns(status: string | null | undefined): DomainCatalogZone["dns"] {
+	return status === "written" || status === "manual" ? status : "unknown";
+}
+
+/**
+ * Zones the token can see, joined with stored domains. `detailed` adds two
+ * Cloudflare calls per zone (sending subdomain + catch-all). Setup does not
+ * need those, and they dominate the first-run page.
+ */
+export async function buildDomainCatalog(
+	cfApiToken: string,
+	stored: StoredDomainCatalogRow[],
+	workerName: string,
+	detailed: boolean,
+): Promise<{ zones: DomainCatalogZone[]; truncated: boolean; total: number }> {
+	const all = await listAllZones(cfApiToken);
+	const capped = all.slice(0, CATALOG_ZONE_CAP);
+	const zones = await Promise.all(
+		capped.map(async (zone) => {
+			const row = stored.find(
+				(domain) =>
+					domain.cf_zone_id === zone.id || domain.name === zone.name || domain.name.endsWith(`.${zone.name}`),
+			);
+			let sending: DomainCatalogZone["sending"] = row?.verified ? "ready" : "off";
+			let sendingName = row?.name ?? null;
+			let routing: DomainCatalogZone["routing"] =
+				row?.routing_status === "ready" || row?.routing_status === "pending" ? row.routing_status : "unknown";
+
+			if (detailed) {
+				try {
+					const subs = await listSendingSubdomains(zone.id, cfApiToken);
+					const match =
+						subs.find((sub) => sub.name === row?.name) ?? subs.find((sub) => sub.enabled) ?? subs[0];
+					sending = match ? (match.enabled ? "ready" : "pending") : "off";
+					sendingName = match?.name ?? sendingName;
+				} catch {
+					/* keep stored state */
+				}
+				try {
+					const rule = await getCatchAllRule(zone.id, cfApiToken);
+					const worker = rule.actions?.find((action) => action.type === "worker");
+					routing = rule.enabled && worker?.value?.includes(workerName) ? "ready" : "pending";
+				} catch {
+					/* keep stored state */
+				}
+			}
+
+			return {
+				zoneName: zone.name,
+				enabled: !!row,
+				domainId: row?.id ?? null,
+				sendingName,
+				sending,
+				routing,
+				dns: catalogDns(row?.dns_status),
+			};
+		}),
+	);
+	return { zones, truncated: all.length > capped.length, total: all.length };
+}
+
+/** Fetch every active zone on the account (handles pagination). */
+export async function listAllZones(cfApiToken: string): Promise<CFZone[]> {
+	const all: CFZone[] = [];
+	let page = 1;
+	while (true) {
+		const res = await fetch(`${CF_BASE}/zones?status=active&per_page=50&page=${page}`, {
+			headers: { Authorization: `Bearer ${cfApiToken}`, "Content-Type": "application/json" },
+		});
+		const json = (await res.json()) as CFResponse<CFZone[]> & {
+			result_info: { total_pages: number; page: number };
+		};
+		if (!json.success) {
+			const first = json.errors?.[0];
+			throw new CloudflareApiError(`CF API error: ${first?.message ?? "error"}`, {
+				code: first?.code ?? null,
+				path: `/zones?page=${page}`,
+				status: res.status,
+			});
+		}
+		all.push(...json.result);
+		if (json.result_info.page >= json.result_info.total_pages) break;
+		page++;
+	}
+	return all;
+}
+
+/**
+ * Find a Cloudflare zone for the given hostname.
+ * Tries progressively shorter suffixes (e.g. mail.example.com → example.com).
+ *
+ * A non-existent zone returns `success:true` with an empty result array (no
+ * throw) — that's the "not found" case. An *error* here (bad token, missing
+ * Zone:Read permission) is meaningful and must NOT be swallowed, otherwise it
+ * masquerades as "No active Cloudflare zone found". We remember the last error
+ * and rethrow it only if no zone was found, so the real cause surfaces.
+ */
+export async function getZoneByHostname(hostname: string, cfApiToken: string): Promise<CFZone | null> {
+	const parts = hostname.split(".");
+	let lastError: unknown = null;
+	for (let i = 0; i < parts.length - 1; i++) {
+		const candidate = parts.slice(i).join(".");
+		try {
+			const zones = await cfFetch<CFZone[]>(
+				`/zones?name=${encodeURIComponent(candidate)}&status=active`,
+				cfApiToken,
+			);
+			if (zones.length > 0) return zones[0];
+		} catch (err) {
+			lastError = err;
+			// try next suffix
+		}
+	}
+	if (lastError) throw lastError;
+	return null;
+}
+
+// ── Sending Subdomains ────────────────────────────────────────────────────────
+
+export interface CFSubdomain {
+	tag: string;
+	name: string;
+	enabled: boolean;
+	dkim_selector: string | null;
+	return_path_domain: string | null;
+	created: string | null;
+	modified: string | null;
+}
+
+export async function createSendingSubdomain(zoneId: string, name: string, cfApiToken: string): Promise<CFSubdomain> {
+	return cfFetch<CFSubdomain>(`/zones/${zoneId}/email/sending/subdomains`, cfApiToken, {
+		method: "POST",
+		body: JSON.stringify({ name }),
+	});
+}
+
+export async function getSendingSubdomain(
+	zoneId: string,
+	subdomainId: string,
+	cfApiToken: string,
+): Promise<CFSubdomain> {
+	return cfFetch<CFSubdomain>(`/zones/${zoneId}/email/sending/subdomains/${subdomainId}`, cfApiToken);
+}
+
+export async function listSendingSubdomains(zoneId: string, cfApiToken: string): Promise<CFSubdomain[]> {
+	return cfFetch<CFSubdomain[]>(`/zones/${zoneId}/email/sending/subdomains`, cfApiToken);
+}
+
+/** Disables sending on a subdomain and removes the DNS records Cloudflare created for it. */
+export async function deleteSendingSubdomain(zoneId: string, subdomainId: string, cfApiToken: string): Promise<void> {
+	await cfFetch(`/zones/${zoneId}/email/sending/subdomains/${subdomainId}`, cfApiToken, { method: "DELETE" });
+}
+
+// ── DNS Records ───────────────────────────────────────────────────────────────
+
+export interface CFDnsRecord {
+	type: string;
+	name: string;
+	content: string;
+	ttl: number | 1;
+	priority?: number;
+}
+
+export async function getSubdomainDnsRecords(
+	zoneId: string,
+	subdomainId: string,
+	cfApiToken: string,
+): Promise<CFDnsRecord[]> {
+	return cfFetch<CFDnsRecord[]>(`/zones/${zoneId}/email/sending/subdomains/${subdomainId}/dns`, cfApiToken);
+}
+
+export interface DnsWriteResult {
+	written: CFDnsRecord[];
+	failed: Array<CFDnsRecord & { error: string }>;
+}
+
+/**
+ * Write Email Sending DNS records into the zone. Existing identical records are
+ * treated as success. A failed write is returned, never thrown, so the caller
+ * can show the records instead of claiming they were published.
+ */
+export async function upsertDnsRecords(
+	zoneId: string,
+	records: CFDnsRecord[],
+	cfApiToken: string,
+): Promise<DnsWriteResult> {
+	const written: CFDnsRecord[] = [];
+	const failed: Array<CFDnsRecord & { error: string }> = [];
+
+	await Promise.all(
+		records.map(async (record) => {
+			try {
+				await cfFetch(`/zones/${zoneId}/dns_records`, cfApiToken, {
+					method: "POST",
+					body: JSON.stringify({
+						type: record.type,
+						name: record.name,
+						content: record.content,
+						ttl: record.ttl || 1,
+						...(record.priority != null ? { priority: record.priority } : {}),
+					}),
+				});
+				written.push(record);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : "DNS write failed";
+				const alreadyExists =
+					err instanceof CloudflareApiError &&
+					(err.code === 81057 ||
+						err.code === 81058 ||
+						err.code === 81053 ||
+						err.code === 81056 ||
+						/already exists/i.test(message));
+				if (alreadyExists) {
+					written.push(record);
+				} else {
+					failed.push({ ...record, error: message });
+				}
+			}
+		}),
+	);
+
+	return { written, failed };
+}
+
+export interface CFZoneDnsRecord {
+	type: string;
+	name: string;
+	content: string;
+	priority?: number;
+}
+
+/** Read-only lookup of records already in the zone, optionally narrowed by type and exact name. */
+export async function listDnsRecords(
+	zoneId: string,
+	cfApiToken: string,
+	query: { type?: string; name?: string } = {},
+): Promise<CFZoneDnsRecord[]> {
+	const params = new URLSearchParams({ per_page: "100" });
+	if (query.type) params.set("type", query.type);
+	if (query.name) params.set("name", query.name);
+	return cfFetch<CFZoneDnsRecord[]>(`/zones/${zoneId}/dns_records?${params}`, cfApiToken);
+}
+
+// ── Email Routing (inbound) ──────────────────────────────────────────────────
+
+export interface CFEmailRoutingCatchAll {
+	enabled: boolean;
+	name: string | null;
+	tag: string | null;
+	matchers: Array<{ type: string }>;
+	actions: Array<{ type: string; value: string[] }>;
+}
+
+/** Enable Email Routing on a zone (idempotent — safe to call if already on). */
+export async function enableEmailRouting(zoneId: string, cfApiToken: string): Promise<void> {
+	try {
+		await cfFetch(`/zones/${zoneId}/email/routing/enable`, cfApiToken, { method: "POST" });
+	} catch (err) {
+		// Already enabled → CF returns 4xx; treat as success.
+		if (err instanceof CloudflareApiError && (err.status === 400 || err.status === 409)) return;
+		throw err;
+	}
+}
+
+/** Read the current catch-all routing rule for a zone. */
+export async function getCatchAllRule(zoneId: string, cfApiToken: string): Promise<CFEmailRoutingCatchAll> {
+	return cfFetch<CFEmailRoutingCatchAll>(`/zones/${zoneId}/email/routing/rules/catch_all`, cfApiToken);
+}
+
+/**
+ * Set the catch-all routing rule for a zone to forward all inbound mail to the
+ * named Worker. This is how the inbox receives email: Cloudflare delivers the
+ * message to the Worker's `email()` export.
+ */
+export async function setCatchAllToWorker(
+	zoneId: string,
+	workerName: string,
+	cfApiToken: string,
+	ruleName = "EmailFlare inbox catch-all",
+): Promise<void> {
+	await cfFetch(`/zones/${zoneId}/email/routing/rules/catch_all`, cfApiToken, {
+		method: "PUT",
+		body: JSON.stringify({
+			enabled: true,
+			name: ruleName,
+			matchers: [{ type: "all" }],
+			actions: [{ type: "worker", value: [workerName] }],
+		}),
+	});
+}
+
+/** Stops the zone's catch-all from delivering anywhere. Used when a domain leaves EmailFlare. */
+export async function disableCatchAll(zoneId: string, cfApiToken: string): Promise<void> {
+	await cfFetch(`/zones/${zoneId}/email/routing/rules/catch_all`, cfApiToken, {
+		method: "PUT",
+		body: JSON.stringify({
+			enabled: false,
+			name: "Catch-all (disabled by EmailFlare)",
+			matchers: [{ type: "all" }],
+			actions: [{ type: "drop" }],
+		}),
+	});
+}
+
+// ── Email Sending ─────────────────────────────────────────────────────────────
+
+export interface CFSendEmailParams {
+	from: string | { address: string; name: string };
+	to: string | string[];
+	subject: string;
+	html?: string;
+	text?: string;
+	replyTo?: string;
+	headers?: Record<string, string>;
+	attachments?: Array<{ content: string; filename: string; type: string; disposition: "attachment" }>;
+}
+
+export interface CFSendEmailResult {
+	id: string;
+}
+
+export async function sendEmail(
+	params: CFSendEmailParams,
+	cfApiToken: string,
+	cfAccountId: string,
+): Promise<CFSendEmailResult> {
+	// The Cloudflare Email Service REST API expects snake_case `reply_to`; our
+	// params use camelCase `replyTo`. Map it (and omit when absent) — CF's schema
+	// is strict and rejects unknown fields with invalid_request_schema.
+	const { replyTo, headers, attachments, ...rest } = params;
+	const body = {
+		...rest,
+		...(replyTo ? { reply_to: replyTo } : {}),
+		...(headers && Object.keys(headers).length ? { headers } : {}),
+		...(attachments?.length ? { attachments } : {}),
+	};
+	return cfFetch<CFSendEmailResult>(`/accounts/${cfAccountId}/email/sending/send`, cfApiToken, {
+		method: "POST",
+		body: JSON.stringify(body),
+	});
+}
+
+// ── Token + Account Status ────────────────────────────────────────────────────
+
+export interface CFTokenStatus {
+	configured: boolean;
+	active: boolean;
+	tokenStatus: string | null;
+	tokenId: string | null;
+	notBefore: string | null;
+	expiresOn: string | null;
+	accountId: string | null;
+	accountName: string | null;
+	message: string;
+}
+
+interface CFTokenVerifyResult {
+	id: string;
+	status: string;
+	not_before: string | null;
+	expires_on: string | null;
+}
+
+interface CFAccountResult {
+	id: string;
+	name: string;
+}
+
+export async function getCloudflareTokenStatus(cfApiToken: string, cfAccountId: string): Promise<CFTokenStatus> {
+	if (!cfApiToken || !cfAccountId) {
+		return {
+			configured: false,
+			active: false,
+			tokenStatus: null,
+			tokenId: null,
+			notBefore: null,
+			expiresOn: null,
+			accountId: cfAccountId || null,
+			accountName: null,
+			message: "CF_API_TOKEN or CF_ACCOUNT_ID is not configured.",
+		};
+	}
+
+	const [verifyResult, accountResult] = await Promise.allSettled([
+		cfFetch<CFTokenVerifyResult>("/user/tokens/verify", cfApiToken),
+		cfFetch<CFAccountResult>(`/accounts/${cfAccountId}`, cfApiToken),
+	]);
+
+	if (verifyResult.status === "rejected") {
+		const error = verifyResult.reason;
+		return {
+			configured: true,
+			active: false,
+			tokenStatus: null,
+			tokenId: null,
+			notBefore: null,
+			expiresOn: null,
+			accountId: cfAccountId,
+			accountName: null,
+			message: error instanceof Error ? error.message : "Unable to verify Cloudflare API token.",
+		};
+	}
+
+	const verify = verifyResult.value;
+	let accountName: string | null = null;
+	let message =
+		verify.status === "active"
+			? "Cloudflare token is active."
+			: `Cloudflare token is not active (${verify.status}).`;
+
+	if (accountResult.status === "fulfilled") {
+		accountName = accountResult.value.name;
+	} else {
+		message += " Account lookup failed (check Account permissions or CF_ACCOUNT_ID).";
+	}
+
+	return {
+		configured: true,
+		active: verify.status === "active",
+		tokenStatus: verify.status,
+		tokenId: verify.id,
+		notBefore: verify.not_before,
+		expiresOn: verify.expires_on,
+		accountId: cfAccountId,
+		accountName,
+		message,
+	};
+}
+
+// ── Bounce Forwarder Worker ───────────────────────────────────────────────────
+//
+// A tiny ES-module Worker deployed to the user's CF account.
+// CF Email Routing calls its `email` handler when a bounce/complaint arrives
+// at the return-path address; it forwards the raw RFC 5322 message to the
+// backend's webhook endpoint.
+
+const BOUNCE_FORWARDER_SCRIPT = `
+export default {
+  async email(message, env) {
+    const raw = await new Response(message.raw).arrayBuffer();
+    const response = await fetch(env.BACKEND_URL + '/api/webhooks/bounce', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'message/rfc822',
+        'Authorization': 'Bearer ' + env.WEBHOOK_SECRET,
+      },
+      body: raw,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      log.error('bounce-forwarder webhook failed', { status: response.status, text });
+    }
+  }
+};
+`.trim();
+
+export interface BounceWorkerInfo {
+	deployed: boolean;
+	modifiedOn: string | null;
+	workerName: string;
+}
+
+/** Check if the bounce forwarder Worker is deployed on this CF account. */
+export async function getBounceWorkerInfo(
+	workerName: string,
+	cfApiToken: string,
+	cfAccountId: string,
+): Promise<BounceWorkerInfo> {
+	try {
+		const result = await cfFetch<{ id: string; modified_on: string }>(
+			`/accounts/${cfAccountId}/workers/scripts/${workerName}`,
+			cfApiToken,
+		);
+		return { deployed: true, modifiedOn: result.modified_on, workerName };
+	} catch (err) {
+		if (err instanceof CloudflareApiError && err.status === 404) {
+			return { deployed: false, modifiedOn: null, workerName };
+		}
+		throw err;
+	}
+}
+
+/**
+ * Deploy (or redeploy) the bounce forwarder Worker.
+ * Uses multipart/form-data as required by the CF Workers Upload API.
+ */
+export async function deployBounceForwarder(
+	workerName: string,
+	cfApiToken: string,
+	cfAccountId: string,
+): Promise<void> {
+	const metadata = JSON.stringify({
+		main_module: "index.js",
+		compatibility_date: "2025-01-01",
+		bindings: [],
+	});
+
+	const boundary = "EmailFlareBoundaryCF";
+	const CRLF = "\r\n";
+	const body = [
+		`--${boundary}`,
+		'Content-Disposition: form-data; name="metadata"',
+		"Content-Type: application/json",
+		"",
+		metadata,
+		`--${boundary}`,
+		'Content-Disposition: form-data; name="index.js"; filename="index.js"',
+		"Content-Type: application/javascript+module",
+		"",
+		BOUNCE_FORWARDER_SCRIPT,
+		`--${boundary}--`,
+	].join(CRLF);
+
+	const res = await fetch(`${CF_BASE}/accounts/${cfAccountId}/workers/scripts/${workerName}`, {
+		method: "PUT",
+		headers: {
+			Authorization: `Bearer ${cfApiToken}`,
+			"Content-Type": `multipart/form-data; boundary=${boundary}`,
+		},
+		body,
+	});
+
+	const json = (await res.json()) as CFResponse<unknown>;
+	if (!json.success) {
+		const first = json.errors?.[0];
+		throw new CloudflareApiError(`CF API error: ${first?.message ?? "deploy failed"}`, {
+			code: first?.code ?? null,
+			path: `/accounts/.../workers/scripts/${workerName}`,
+			status: res.status,
+		});
+	}
+}
+
+/** Create or update a secret on a Worker script. */
+export async function setWorkerSecret(
+	workerName: string,
+	name: string,
+	value: string,
+	cfApiToken: string,
+	cfAccountId: string,
+): Promise<void> {
+	await cfFetch(`/accounts/${cfAccountId}/workers/scripts/${workerName}/secrets`, cfApiToken, {
+		method: "PUT",
+		body: JSON.stringify({ name, text: value, type: "secret_text" }),
+	});
+}

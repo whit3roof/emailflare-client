@@ -1,0 +1,270 @@
+---
+import { Icon } from "astro-icon/components";
+import Base from "@/layouts/Base.astro";
+import { buttonVariants } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import CodeBlock from "@/components/site/CodeBlock.astro";
+import Section from "@/components/site/Section.astro";
+import SectionHeading from "@/components/site/SectionHeading.astro";
+import PageHero from "@/components/sections/PageHero.astro";
+import DocLayout from "@/components/docs/DocLayout.astro";
+import DocSection from "@/components/docs/DocSection.astro";
+import DocTable from "@/components/docs/DocTable.astro";
+import Prose from "@/components/docs/Prose.astro";
+import Callout from "@/components/docs/Callout.astro";
+import Step from "@/components/docs/Step.astro";
+
+const toc = [
+	{ id: "permissions", label: "Permissions" },
+	{ id: "create", label: "Create the token" },
+	{ id: "add", label: "Add it to the Worker" },
+	{ id: "verify", label: "Check it works" },
+	{ id: "troubleshooting", label: "Troubleshooting" },
+];
+
+const permissions = [
+	[
+		"Email Sending",
+		"Account",
+		"Edit",
+		"Sending mail through the Cloudflare API, and creating a sending subdomain for each domain you enable.",
+	],
+	["Zone", "Zone", "Read", "Listing your zones for the domain picker, and finding the zone that owns a hostname."],
+	["DNS", "Zone", "Edit", "Publishing the DNS records Email Sending asks for (SPF, DKIM and return path)."],
+	[
+		"Zone Settings",
+		"Zone",
+		"Edit",
+		"Turning on Email Routing for the zone. Cloudflare gates the enable call on this permission, not on Email Routing Rules.",
+	],
+	["Email Routing Rules", "Zone", "Edit", "Setting the zone's catch-all rule so inbound mail goes to your Worker."],
+	["Account Settings", "Account", "Read", "Optional. Lets the dashboard show your account name in the token status."],
+];
+
+const troubleshooting = [
+	[
+		"Domain setup says the token is missing a permission",
+		"One of Email Sending, Zone Read or the other permissions above is absent, or the zone is outside the token's Zone Resources.",
+		"Edit the token, compare it with the table, and include the zone under Zone Resources.",
+	],
+	[
+		"The domain is saved but inbound mail does not arrive",
+		"Zone Settings: Edit or Email Routing Rules: Edit is missing, so EmailFlare could not enable routing or set the catch-all.",
+		"Add both permissions, or set the catch-all by hand. See the [deployment guide](/cloudflare#after-deploy).",
+	],
+	[
+		"DNS records are listed for you to add manually",
+		"DNS: Edit is missing, or a record could not be written.",
+		"Add DNS: Edit to the token, or create the listed records in your DNS settings.",
+	],
+	[
+		"The domain picker is empty",
+		"Zone: Read is missing, or the token's Zone Resources exclude your domain.",
+		"Add Zone: Read and include the zone.",
+	],
+	[
+		"Token status says the token is not active",
+		"The token has expired, was rolled or was deleted.",
+		"Create a new token and set `CF_API_TOKEN` again.",
+	],
+	[
+		"Token status cannot find the account",
+		"`CF_ACCOUNT_ID` is wrong, or the token has no Account Settings: Read permission.",
+		"Check the ID. Account Settings: Read only affects the status display.",
+	],
+];
+
+const prodSecrets = `just dashboard-secret CF_API_TOKEN
+just dashboard-secret CF_ACCOUNT_ID`;
+
+const devVars = `CF_API_TOKEN=your_token_value
+CF_ACCOUNT_ID=your_account_id`;
+---
+
+<Base
+	title="Create a Cloudflare API token for EmailFlare"
+	description="The Cloudflare API token permissions EmailFlare needs for sending, DNS and Email Routing, with a step-by-step guide and troubleshooting."
+	path="/cloudflare-token"
+>
+	<PageHero
+		eyebrow="Cloudflare setup"
+		title="Create the Cloudflare API token"
+		description="EmailFlare uses one API token to set up sending domains, publish DNS records, route inbound mail and send. Give it these permissions and no more."
+	>
+		<a
+			href="https://dash.cloudflare.com/profile/api-tokens"
+			target="_blank"
+			rel="noopener"
+			class={buttonVariants({ size: "xl" })}
+		>
+			Open Cloudflare API tokens
+			<Icon name="lucide:arrow-up-right" />
+		</a>
+		<a href="/cloudflare" class={buttonVariants({ size: "xl", variant: "outline" })}>
+			Deployment guide
+		</a>
+	</PageHero>
+
+	<DocLayout toc={toc}>
+		<DocSection id="permissions" title="Permissions">
+			<Prose>
+				<p>
+					These are the permissions the code uses. Each row names the Cloudflare API call that needs it, so
+					you can leave out anything for a feature you will not use.
+				</p>
+			</Prose>
+			<DocTable
+				caption="Cloudflare API token permissions"
+				columns={["Permission", "Level", "Access", "Used for"]}
+				rows={permissions}
+				minWidth="min-w-[42rem]"
+			/>
+			<Callout tone="warning" title="Zone Settings: Edit is the one people miss">
+				<p>
+					Enabling Email Routing calls <code>POST /zones/&#123;id&#125;/email/routing/enable</code>.
+					Cloudflare allows that call with <strong>Zone Settings: Edit</strong>. Without it, enabling a domain
+					fails to switch routing on even though the other steps work.
+				</p>
+			</Callout>
+		</DocSection>
+
+		<DocSection id="create" title="Create the token">
+			<ol class="list-none">
+				<Step n={1} title="Open the API Tokens page">
+					<Prose>
+						<p>
+							Go to{" "}
+							<a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noopener">
+								dash.cloudflare.com/profile/api-tokens
+							</a>
+							, select <strong>Create Token</strong>, then choose <strong>Create Custom Token</strong> at
+							the bottom of the template list.
+						</p>
+					</Prose>
+				</Step>
+				<Step n={2} title="Name the token">
+					<Prose>
+						<p>
+							Use a name you will recognise later, such as <code>emailflare-production</code>.
+						</p>
+					</Prose>
+				</Step>
+				<Step n={3} title="Add the permissions">
+					<Prose>
+						<p>
+							Under <strong>Permissions</strong>, add one row for each permission in the table above. Pick
+							the level (Account or Zone), the permission, then the access.
+						</p>
+					</Prose>
+				</Step>
+				<Step n={4} title="Set the resources">
+					<Prose>
+						<p>
+							Under <strong>Account Resources</strong>, include your account. Under{" "}
+							<strong>Zone Resources</strong>, include only the zones you will send from and receive on. A
+							token limited to those zones does less damage if it leaks.
+						</p>
+					</Prose>
+				</Step>
+				<Step n={5} title="Create it and copy the value">
+					<Prose>
+						<p>
+							Select <strong>Continue to summary</strong>, check the list, then{" "}
+							<strong>Create Token</strong>. Cloudflare shows the token once. Copy it into a password
+							manager before you leave the page.
+						</p>
+					</Prose>
+				</Step>
+				<Step n={6} title="Find your account ID">
+					<Prose>
+						<p>
+							In the Cloudflare dashboard, open <strong>Workers &amp; Pages</strong>. The{" "}
+							<strong>Account ID</strong> is a 32-character hex string in the sidebar. It also appears in
+							the dashboard URL after <code>dash.cloudflare.com/</code>.
+						</p>
+					</Prose>
+				</Step>
+			</ol>
+		</DocSection>
+
+		<DocSection id="add" title="Add it to the Worker">
+			<Prose>
+				<p>
+					Both values are secrets. For a deployed Worker, set them with the just recipe or{" "}
+					<code>wrangler secret put</code>:
+				</p>
+			</Prose>
+			<CodeBlock code={prodSecrets} title="Production" />
+			<Prose>
+				<p>
+					For local development, put them in <code>apps/dashboard/.dev.vars</code>, which is gitignored:
+				</p>
+			</Prose>
+			<CodeBlock code={devVars} lang="text" title="apps/dashboard/.dev.vars" />
+			<Callout>
+				<p>
+					Never commit the token or put it in a Wrangler config file. If it leaks, roll it from the API Tokens
+					page and set the secret again.
+				</p>
+			</Callout>
+		</DocSection>
+
+		<DocSection id="verify" title="Check it works">
+			<Prose>
+				<p>
+					After the Worker has both secrets, the dashboard checks the token with Cloudflare and reports
+					whether it is active and which account it belongs to. Then enable a domain. If a permission is
+					missing, the dashboard says so and shows what is left to do by hand.
+				</p>
+			</Prose>
+		</DocSection>
+
+		<DocSection id="troubleshooting" title="Troubleshooting">
+			<DocTable
+				caption="Token problems and fixes"
+				columns={["Symptom", "Cause", "Fix"]}
+				rows={troubleshooting}
+				minWidth="min-w-[44rem]"
+			/>
+		</DocSection>
+	</DocLayout>
+
+	<Section tone="muted" class="py-16 md:py-20">
+		<SectionHeading eyebrow="Next" title="Keep going." />
+		<div class="mt-8 grid gap-5 md:grid-cols-3">
+			<a href="/cloudflare" class="group block">
+				<Card className="group-hover:ring-primary/50 h-full transition-shadow">
+					<CardContent className="px-6 py-2">
+						<Icon name="lucide:cloud-upload" class="text-primary mb-4 size-6" />
+						<h3 class="text-lg font-semibold">Deploy the Worker</h3>
+						<p class="text-muted-foreground mt-2 text-sm leading-6">
+							Bindings, secrets and the Workers Builds settings.
+						</p>
+					</CardContent>
+				</Card>
+			</a>
+			<a href="/docs" class="group block">
+				<Card className="group-hover:ring-primary/50 h-full transition-shadow">
+					<CardContent className="px-6 py-2">
+						<Icon name="lucide:book-open" class="text-primary mb-4 size-6" />
+						<h3 class="text-lg font-semibold">Read the docs</h3>
+						<p class="text-muted-foreground mt-2 text-sm leading-6">
+							The send API, templates, keys and error codes.
+						</p>
+					</CardContent>
+				</Card>
+			</a>
+			<a href="/security" class="group block">
+				<Card className="group-hover:ring-primary/50 h-full transition-shadow">
+					<CardContent className="px-6 py-2">
+						<Icon name="lucide:shield-check" class="text-primary mb-4 size-6" />
+						<h3 class="text-lg font-semibold">Security</h3>
+						<p class="text-muted-foreground mt-2 text-sm leading-6">
+							What you are responsible for when you self-host.
+						</p>
+					</CardContent>
+				</Card>
+			</a>
+		</div>
+	</Section>
+</Base>

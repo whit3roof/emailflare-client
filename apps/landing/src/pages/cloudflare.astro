@@ -1,0 +1,471 @@
+---
+import { Icon } from "astro-icon/components";
+import Base from "@/layouts/Base.astro";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { site } from "@/lib/site";
+import Section from "@/components/site/Section.astro";
+import SectionHeading from "@/components/site/SectionHeading.astro";
+import CodeBlock from "@/components/site/CodeBlock.astro";
+import PageHero from "@/components/sections/PageHero.astro";
+import Architecture from "@/components/sections/Architecture.astro";
+import CtaBand from "@/components/sections/CtaBand.astro";
+import DocLayout from "@/components/docs/DocLayout.astro";
+import DocSection from "@/components/docs/DocSection.astro";
+import DocTable from "@/components/docs/DocTable.astro";
+import Prose from "@/components/docs/Prose.astro";
+import Callout from "@/components/docs/Callout.astro";
+import Step from "@/components/docs/Step.astro";
+
+const toc = [
+	{ id: "requirements", label: "Before you start" },
+	{ id: "deploy", label: "Deploy" },
+	{ id: "bindings", label: "Bindings" },
+	{ id: "config", label: "Configuration" },
+	{ id: "secrets", label: "Secrets" },
+	{ id: "after-deploy", label: "After the first deploy" },
+	{ id: "update", label: "Updating" },
+	{ id: "local", label: "Local development" },
+	{ id: "troubleshooting", label: "Troubleshooting" },
+];
+
+const buildSettings = [
+	["Root directory", "`apps/dashboard`", "Where the Worker lives in the repository."],
+	["Build command", "Leave empty", "The `predeploy` script runs the build for you."],
+	[
+		"Deploy command",
+		"`pnpm run deploy`",
+		"Merges `wrangler.production.jsonc` into the base config, applies D1 migrations, then deploys.",
+	],
+	["Production branch", "Your default branch", "Pushes to it build and deploy a new version."],
+];
+
+const bindings = [
+	[
+		"D1 database",
+		"`DB`",
+		"Users, mailboxes, threads, contacts, templates, API keys, domains, logs and suppressions. Migrations in `apps/dashboard/migrations` run on every deploy.",
+	],
+	["R2 bucket", "`ATTACHMENTS`", "Raw inbound messages (MIME) and attachments."],
+	[
+		"KV namespace",
+		"`RATE_LIMIT_KV`",
+		"Login and password-reset rate limits, plus short-lived tokens such as password resets and two-factor setup.",
+	],
+	[
+		"Queue",
+		"`EMAIL_QUEUE`",
+		"Producer and consumer for sequence steps and scheduled sends. Batches of up to 10, with a 30 second timeout.",
+	],
+	[
+		"Durable Object",
+		"`NOTIFICATIONS`",
+		"The `NotificationsHub` class. Pushes live inbox updates to open browsers over WebSocket.",
+	],
+	[
+		"Rate limiting",
+		"`RATE_LIMITER`",
+		"100 requests per 60 seconds per API key. Needs a Workers Paid plan. If the binding is missing, requests are not limited per key.",
+	],
+	["Static assets", "`ASSETS`", "The dashboard's client files."],
+	["Cron trigger", "`*/5 * * * *`", "Runs `scheduled()` every five minutes to process due sequence steps."],
+];
+
+const configKeys = [
+	["`name`", "The Worker name. Change it if `emailflare` is taken in your account."],
+	["`d1_databases[].database_id`", "The ID of your D1 database. The all-zero placeholder fails the deploy."],
+	["`kv_namespaces[].id`", "The ID of your KV namespace. The all-zero placeholder fails the deploy."],
+	["`r2_buckets[].bucket_name`", "The name of your R2 bucket. Required, and the bucket must already exist."],
+	[
+		"`queues`",
+		"The queue name, set the same under `producers` and `consumers`. Create the queue before the first deploy.",
+	],
+	[
+		"`vars.PUBLIC_URL`",
+		"Your public origin, such as `https://mail.yourcompany.com`, with no trailing slash. Invite, password reset, unsubscribe and tracking links use it.",
+	],
+	["`vars.INBOX_WORKER_NAME`", "The Worker that receives catch-all mail. Keep it equal to `name`."],
+	["`vars.CF_DAILY_LIMIT`", "The daily send limit shown on the Overview page. Defaults to `1000`."],
+];
+
+const secrets = [
+	[
+		"`SESSION_SECRET`",
+		"Signs session cookies. Use at least 32 random characters. Generate one with `openssl rand -hex 32`.",
+	],
+	[
+		"`CF_API_TOKEN`",
+		"Your Cloudflare API token. Used to list zones, create sending subdomains, write DNS records and set Email Routing. [How to create it](/cloudflare-token).",
+	],
+	[
+		"`CF_ACCOUNT_ID`",
+		"Your Cloudflare account ID, shown under Workers & Pages in the dashboard. Used for sending and token status.",
+	],
+];
+
+const troubleshooting = [
+	[
+		"`still has placeholder D1 or KV IDs`",
+		"`wrangler.production.jsonc` still contains the all-zero IDs from the example.",
+		"Paste the real `database_id` and KV `id`, then deploy again.",
+	],
+	[
+		"`Missing wrangler.production.jsonc`",
+		"The deploy script reads this gitignored file and stops without it.",
+		"Copy `wrangler.production.example.jsonc` and fill it in.",
+	],
+	[
+		"`missing ATTACHMENTS.bucket_name`",
+		"The R2 binding has no bucket name.",
+		"Create the bucket and set `bucket_name` on the `ATTACHMENTS` binding.",
+	],
+	[
+		"Domain setup says a permission is missing",
+		"The API token lacks one of the permissions EmailFlare calls.",
+		"Compare the token with the [permissions table](/cloudflare-token#permissions).",
+	],
+	[
+		"Mail to your domain does not arrive",
+		"The zone's catch-all rule does not point at this Worker, or `INBOX_WORKER_NAME` differs from `name`.",
+		"In the zone, open Email, then Email Routing, and send the catch-all to the Worker named in `INBOX_WORKER_NAME`.",
+	],
+];
+
+const cliFlow = `git clone ${site.repo}.git
+cd emailflare
+just install
+
+# Create the resources, then copy the IDs into the config
+cd apps/dashboard
+pnpm exec wrangler login
+pnpm exec wrangler d1 create emailflare
+pnpm exec wrangler kv namespace create RATE_LIMIT_KV
+pnpm exec wrangler r2 bucket create emailflare-attachments
+pnpm exec wrangler queues create emailflare-sequences
+cp wrangler.production.example.jsonc wrangler.production.jsonc
+cd ../..`;
+
+const deployCmd = `just dashboard-deploy`;
+
+const prodConfig = `{
+	"name": "emailflare",
+
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "emailflare",
+			"database_id": "<your D1 database id>",
+			"migrations_dir": "migrations"
+		}
+	],
+	"kv_namespaces": [
+		{ "binding": "RATE_LIMIT_KV", "id": "<your KV namespace id>" }
+	],
+	"r2_buckets": [
+		{ "binding": "ATTACHMENTS", "bucket_name": "emailflare-attachments" }
+	],
+	"queues": {
+		"producers": [{ "binding": "EMAIL_QUEUE", "queue": "emailflare-sequences" }],
+		"consumers": [
+			{ "queue": "emailflare-sequences", "max_batch_size": 10, "max_batch_timeout": 30 }
+		]
+	},
+
+	"vars": {
+		"PUBLIC_URL": "https://mail.yourcompany.com",
+		"INBOX_WORKER_NAME": "emailflare",
+		"CF_DAILY_LIMIT": "1000"
+	}
+}`;
+
+const secretCmds = `just dashboard-secret SESSION_SECRET
+just dashboard-secret CF_API_TOKEN
+just dashboard-secret CF_ACCOUNT_ID`;
+
+const wranglerSecretCmds = `cd apps/dashboard
+pnpm exec wrangler secret put SESSION_SECRET
+pnpm exec wrangler secret put CF_API_TOKEN
+pnpm exec wrangler secret put CF_ACCOUNT_ID`;
+
+const localCmds = `just install
+
+cp apps/dashboard/wrangler.local.example.jsonc apps/dashboard/wrangler.local.jsonc
+cp apps/dashboard/.dev.vars.example apps/dashboard/.dev.vars
+
+just dashboard-migrate
+just dashboard-dev`;
+---
+
+<Base
+	title="Deploy EmailFlare to Cloudflare Workers"
+	description="Deploy EmailFlare as one Cloudflare Worker with D1, R2, KV, Queues and a Durable Object. Workers Builds settings, bindings, secrets, production config and local development."
+	path="/cloudflare"
+>
+	<PageHero
+		eyebrow="Deploy"
+		title="Deploy EmailFlare on Cloudflare Workers"
+		description="One Worker, plus a D1 database, an R2 bucket, a KV namespace, a queue and a Durable Object, all in your account. Use the deploy button, or deploy from the command line."
+	>
+		<a href={site.deploy} class={buttonVariants({ size: "xl" })}>
+			<Icon name="lucide:cloud-upload" />
+			Deploy to Cloudflare
+		</a>
+		<a href="/cloudflare-token" class={buttonVariants({ size: "xl", variant: "outline" })}>
+			Create an API token
+			<Icon name="lucide:arrow-right" />
+		</a>
+	</PageHero>
+
+	<Section tone="ink" class="py-16 md:py-20">
+		<SectionHeading
+			eyebrow="What you are deploying"
+			title="One Worker, five services."
+			description="The dashboard, the REST API and the email handlers ship together. Cloudflare Email Routing hands inbound mail to the Worker's email handler."
+			class="[&_p]:text-ink-muted [&_p:first-child]:!text-primary"
+		/>
+		<div class="mt-10">
+			<Architecture />
+		</div>
+	</Section>
+
+	<DocLayout toc={toc}>
+		<DocSection id="requirements" title="Before you start">
+			<Prose>
+				<ul>
+					<li>
+						A Cloudflare account. Any domain you want to send from or receive on must be added to it as a
+						zone.
+					</li>
+					<li>
+						A Cloudflare API token and your account ID. The <a href="/cloudflare-token">token guide</a>{" "}
+						lists the exact permissions.
+					</li>
+					<li>
+						For command-line deploys: Node.js 22 or later, pnpm and{" "}
+						<a href="https://github.com/casey/just" target="_blank" rel="noopener">
+							just
+						</a>
+						.
+					</li>
+				</ul>
+			</Prose>
+		</DocSection>
+
+		<DocSection id="deploy" title="Deploy">
+			<Prose>
+				<h3>Option 1: the deploy button</h3>
+				<p>
+					The button opens Cloudflare's deploy flow. It copies the repository into your Git account and
+					creates a Worker connected to it with Workers Builds, along with the bindings described below. Check
+					the build settings it proposes against this table.
+				</p>
+			</Prose>
+			<DocTable
+				caption="Workers Builds settings"
+				columns={["Setting", "Value", "Notes"]}
+				rows={buildSettings}
+				minWidth="min-w-[32rem]"
+			/>
+			<div>
+				<a href={site.deploy} class={cn(buttonVariants({ size: "lg" }))}>
+					<Icon name="lucide:cloud-upload" /> Deploy to Cloudflare
+				</a>
+			</div>
+			<Prose>
+				<h3>Option 2: the command line</h3>
+				<p>
+					Create the D1 database, KV namespace, R2 bucket and queue yourself, then fill in{" "}
+					<code>wrangler.production.jsonc</code>. This file is gitignored, so it stays on your machine.
+				</p>
+			</Prose>
+			<CodeBlock code={cliFlow} title="Create resources" />
+			<Callout tone="warning" title="The deploy script is strict">
+				<p>
+					<code>pnpm run deploy</code> merges <code>wrangler.production.jsonc</code> over{" "}
+					<code>wrangler.jsonc</code>. It stops if the file is missing, if the D1 or KV ID is still the
+					all-zero placeholder, or if the <code>ATTACHMENTS</code> binding has no <code>bucket_name</code>.
+				</p>
+			</Callout>
+			<p class="text-muted-foreground text-[0.9375rem] leading-7">
+				Fill in the config in the next two sections, set the secrets, then deploy:
+			</p>
+			<CodeBlock code={deployCmd} title="Deploy" />
+		</DocSection>
+
+		<DocSection id="bindings" title="Bindings">
+			<Prose>
+				<p>
+					Binding names are part of the app. Do not rename them. Only resource names and IDs change per
+					install.
+				</p>
+			</Prose>
+			<DocTable
+				caption="Cloudflare bindings and triggers"
+				columns={["Resource", "Binding", "What it is used for"]}
+				rows={bindings}
+			/>
+			<Prose>
+				<p>
+					The Worker exports three handlers next to the web app: <code>email()</code> for inbound mail,{" "}
+					<code>queue()</code> for the send queue and <code>scheduled()</code> for the cron trigger.
+				</p>
+			</Prose>
+		</DocSection>
+
+		<DocSection id="config" title="Configuration">
+			<Prose>
+				<p>
+					<code>wrangler.jsonc</code> holds the defaults and is committed. Your install overrides it in a file
+					that stays out of Git: <code>wrangler.production.jsonc</code> for deploys and{" "}
+					<code>wrangler.local.jsonc</code> for <code>just dashboard-dev</code>. Start from the matching{" "}
+					<code>.example.jsonc</code> file.
+				</p>
+			</Prose>
+			<CodeBlock code={prodConfig} lang="json" title="apps/dashboard/wrangler.production.jsonc" />
+			<DocTable
+				caption="Keys to set in wrangler.production.jsonc"
+				columns={["Key", "Set it to"]}
+				rows={configKeys}
+				minWidth="min-w-[30rem]"
+			/>
+			<Callout>
+				<p>
+					Keep the production origin out of <code>wrangler.local.jsonc</code>. Local development uses{" "}
+					<code>http://localhost:5173</code>.
+				</p>
+			</Callout>
+		</DocSection>
+
+		<DocSection id="secrets" title="Secrets">
+			<Prose>
+				<p>
+					Three values are secrets. Never put them in a Wrangler file or commit them. Set them once the Worker
+					exists.
+				</p>
+			</Prose>
+			<DocTable
+				caption="Worker secrets"
+				columns={["Secret", "What it is"]}
+				rows={secrets}
+				minWidth="min-w-[30rem]"
+			/>
+			<Prose>
+				<p>Set each one with the just recipe, which merges your production config first:</p>
+			</Prose>
+			<CodeBlock code={secretCmds} title="Set the secrets" />
+			<Prose>
+				<p>
+					Or use Wrangler directly, or <strong>Settings</strong>, then <strong>Variables and secrets</strong>{" "}
+					on the Worker in the Cloudflare dashboard.
+				</p>
+			</Prose>
+			<CodeBlock code={wranglerSecretCmds} title="With Wrangler" />
+		</DocSection>
+
+		<DocSection id="after-deploy" title="After the first deploy">
+			<ol class="list-none">
+				<Step n={1} title="Set the secrets">
+					<Prose>
+						<p>
+							Sign-in, setup and invites need <code>SESSION_SECRET</code>. Domain setup needs{" "}
+							<code>CF_API_TOKEN</code> and <code>CF_ACCOUNT_ID</code>.
+						</p>
+					</Prose>
+				</Step>
+				<Step n={2} title="Create the administrator">
+					<Prose>
+						<p>
+							Open your <code>workers.dev</code> address, or your custom domain, and complete the{" "}
+							<code>/setup</code> wizard. It creates the first administrator and your workspace.
+						</p>
+					</Prose>
+				</Step>
+				<Step n={3} title="Enable a domain">
+					<Prose>
+						<p>
+							In the dashboard, enable a domain from your account. If the token can edit DNS, Zone
+							Settings and Email Routing rules, EmailFlare writes the records and points the zone's
+							catch-all at the Worker.
+						</p>
+						<p>
+							If it cannot, the domain is still saved and the dashboard shows what is left. To finish by
+							hand, open the zone, go to <strong>Email</strong>, then <strong>Email Routing</strong>, and
+							send the catch-all to the Worker named in <code>INBOX_WORKER_NAME</code>.
+						</p>
+					</Prose>
+				</Step>
+				<Step n={4} title="Update PUBLIC_URL if you add a custom domain">
+					<Prose>
+						<p>
+							Set <code>vars.PUBLIC_URL</code> to the new origin and deploy again, so invite and
+							unsubscribe links point at it.
+						</p>
+					</Prose>
+				</Step>
+				<Step n={5} title="Create an API key and send">
+					<Prose>
+						<p>
+							Create a key in the dashboard and call <code>POST /v1/send</code>. See the{" "}
+							<a href="/email-api">Email API</a> page.
+						</p>
+					</Prose>
+				</Step>
+			</ol>
+		</DocSection>
+
+		<DocSection id="update" title="Updating">
+			<Prose>
+				<p>
+					Pull the latest release into your repository and deploy again. With Workers Builds, pushing to the
+					production branch does this. Each deploy applies any new D1 migrations before the Worker ships. The{" "}
+					<a href="/changelog">changelog</a> lists what changed.
+				</p>
+			</Prose>
+		</DocSection>
+
+		<DocSection id="local" title="Local development">
+			<Prose>
+				<p>
+					Locally the app runs on Miniflare with emulated D1, KV and R2, so you need no Cloudflare resources
+					and no mail server. It serves on <code>http://localhost:5173</code>.
+				</p>
+			</Prose>
+			<CodeBlock code={localCmds} title="Run locally" />
+			<Prose>
+				<p>
+					Put local secrets in <code>apps/dashboard/.dev.vars</code>. Mail sent with a test key is captured in
+					the sandbox mailbox, and inbound mail is not delivered to a local instance.{" "}
+					<code>just dashboard-fresh</code> deletes the local database, applies migrations and starts the dev
+					server again.
+				</p>
+			</Prose>
+		</DocSection>
+
+		<DocSection id="troubleshooting" title="Troubleshooting">
+			<DocTable
+				caption="Common deploy and setup problems"
+				columns={["Symptom", "Cause", "Fix"]}
+				rows={troubleshooting}
+				minWidth="min-w-[40rem]"
+			/>
+			<Prose>
+				<p>
+					Still stuck? Read the{" "}
+					<a href={`${site.repo}/blob/trunk/docs/CLOUDFLARE.md`} target="_blank" rel="noopener">
+						deployment notes in the repository
+					</a>{" "}
+					or{" "}
+					<a href={`${site.repo}/issues`} target="_blank" rel="noopener">
+						open an issue
+					</a>
+					.
+				</p>
+			</Prose>
+		</DocSection>
+	</DocLayout>
+
+	<CtaBand
+		title="Ready when you are."
+		description="The deploy button creates the Worker. Set three secrets, run the setup wizard and add a domain."
+	/>
+</Base>

@@ -1,0 +1,154 @@
+// Inbox compose / reply routes
+// POST /api/inbox/compose    — send new email to a person
+// POST /api/inbox/reply      — reply to an inbound email
+
+import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
+import {
+	generateId,
+	sendWithLog,
+	resolveDomainId,
+	createLogger,
+	composeSchema,
+	buildReplyToAddress,
+	threadMessageId,
+	upsertPerson,
+	resolveThreadId,
+} from "@/lib/core";
+import { sendEmail, type CFSendEmailParams } from "../../services/cloudflare.ts";
+import { D1Db } from "../../db.ts";
+import type { HonoEnv } from "../../env.ts";
+
+const log = createLogger("inbox-compose");
+
+const app = new Hono<HonoEnv>();
+
+// POST /api/inbox/compose
+app.post("/", zValidator("json", composeSchema), async (c) => {
+	try {
+		const body = c.req.valid("json");
+		const userId = c.get("userId");
+		const userType = c.get("userType");
+
+		// Enforce that non-admin members can only send from mailboxes they are assigned to
+		if (userType !== "admin") {
+			const memberRow = await c.env.DB.prepare(
+				"SELECT 1 FROM inboxes i JOIN inbox_members im ON i.id = im.inbox_id WHERE im.user_id = ? AND i.email = ?",
+			)
+				.bind(userId, body.from)
+				.first();
+
+			if (!memberRow) {
+				return c.json({ error: "Forbidden: You are not assigned to this sending mailbox" }, 403);
+			}
+		}
+
+		const now = new Date().toISOString();
+		const db = new D1Db(c.env.DB);
+
+		const personId = body.personId ?? (await upsertPerson(db, body.to, body.from, { generateId }));
+
+		// A fresh token per message, embedded in the Reply-To address. When the
+		// recipient replies, the +ef_<token> address routes back here so we can
+		// thread the reply to exactly this message (Cloudflare controls the real
+		// Message-ID, so headers alone can't do this).
+		const threadToken = generateId();
+		const syntheticMessageId = threadMessageId(threadToken);
+		const replyToAddress = buildReplyToAddress(body.from, threadToken);
+		const threadId = await resolveThreadId(db, body.inReplyTo, {
+			generateId,
+			references: body.references,
+			subject: body.subject,
+			personId,
+			inboxAddress: body.from,
+		});
+
+		const mailbox = await c.env.DB.prepare("SELECT display_name FROM inboxes WHERE email = ? LIMIT 1")
+			.bind(body.from)
+			.first<{ display_name: string }>();
+		const fromName = body.fromName?.trim() || mailbox?.display_name?.trim();
+		const fromField: CFSendEmailParams["from"] = fromName ? { address: body.from, name: fromName } : body.from;
+
+		// Forward threading headers so replies thread correctly in the recipient's
+		// client too (In-Reply-To / References are allowlisted by CF). Reply-To is a
+		// first-class field carrying our +ef_<token> plus-address.
+		const headers: Record<string, string> = {};
+		if (body.inReplyTo) headers["In-Reply-To"] = body.inReplyTo;
+		if (body.references) headers["References"] = body.references;
+
+		const result = await sendWithLog(
+			{
+				deliver: (msg) =>
+					sendEmail(
+						{ ...msg, replyTo: replyToAddress, ...(Object.keys(headers).length ? { headers } : {}) },
+						c.env.CF_API_TOKEN,
+						c.env.CF_ACCOUNT_ID,
+					),
+				resolveDomainId: (from) => resolveDomainId(db, from),
+				insertLog: async (row) => {
+					await c.env.DB.prepare(
+						`INSERT INTO email_logs (id, to_address, from_address, subject, status, cf_message_id, domain_id, template_id, api_key_id, idempotency_key, error, is_test, sent_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					)
+						.bind(
+							row.id,
+							row.to_address,
+							row.from_address,
+							row.subject,
+							row.status,
+							row.cf_message_id,
+							row.domain_id,
+							row.template_id,
+							row.api_key_id,
+							row.idempotency_key,
+							row.error,
+							row.is_test,
+							row.sent_at,
+						)
+						.run();
+				},
+			},
+			{
+				from: fromField,
+				to: body.to,
+				subject: body.subject,
+				html: body.html,
+				text: body.text,
+				attachments: body.attachments?.map((file) => ({ ...file, disposition: "attachment" as const })),
+			},
+		);
+
+		const id = generateId();
+		const htmlContent = body.html ?? (body.text ? `<p>${body.text.replace(/\n/g, "<br>")}</p>` : null);
+		await c.env.DB.prepare(
+			`INSERT INTO sent_inbox_emails (id, person_id, thread_id, in_reply_to, "references", message_id, thread_token, from_address, to_address, subject, body_text, body_html, status, cf_message_id, sent_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		)
+			.bind(
+				id,
+				personId,
+				threadId,
+				body.inReplyTo ?? null,
+				body.references ?? null,
+				syntheticMessageId,
+				threadToken,
+				body.from,
+				body.to,
+				body.subject,
+				body.text ?? null,
+				htmlContent,
+				"sent",
+				result.cfId ?? null,
+				now,
+			)
+			.run();
+
+		return c.json({ ok: true, id, threadId, personId, error: result.error });
+	} catch (err) {
+		const message = err instanceof Error ? err.message : "Unknown error";
+		log.error("compose failed", { message, error: err instanceof Error ? err.message : String(err) });
+		return c.json({ error: message }, 500);
+	}
+});
+
+export default app;

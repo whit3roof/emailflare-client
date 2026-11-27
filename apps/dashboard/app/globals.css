@@ -1,0 +1,78 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "./theme.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	html {
+		color-scheme: light;
+	}
+	html.dark {
+		color-scheme: dark;
+	}
+	body {
+		@apply bg-background text-foreground font-sans antialiased;
+		font-feature-settings: "cv11", "ss01";
+	}
+	h1,
+	h2,
+	h3 {
+		@apply tracking-tight;
+	}
+	:where(a, button, [role="button"], [tabindex]):focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: 2px;
+	}
+	::selection {
+		background: color-mix(in oklch, var(--primary) 20%, transparent);
+		color: inherit;
+	}
+}
+
+/* Cards get theme-aware depth instead of the stock ring. */
+[data-slot="card"] {
+	box-shadow: var(--shadow-sm);
+	border: none;
+}
+
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+::-webkit-scrollbar-thumb {
+	background: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
+	border-radius: 999px;
+	border: 2px solid transparent;
+	background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+	background-clip: padding-box;
+}
+
+a,
+button,
+[role="button"] {
+	transition-property: color, background-color, border-color, opacity, box-shadow, transform;
+	transition-duration: 120ms;
+	transition-timing-function: ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		transition-duration: 0.01ms !important;
+	}
+}

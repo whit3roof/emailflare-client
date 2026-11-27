@@ -1,0 +1,369 @@
+---
+import { Icon } from "astro-icon/components";
+import Base from "@/layouts/Base.astro";
+import { buttonVariants } from "@/components/ui/button";
+import { site } from "@/lib/site";
+import { faq as sharedFaq, faqJsonLd } from "@/lib/faq";
+import type { FaqItem } from "@/components/islands/Faq";
+import Container from "@/components/site/Container.astro";
+import Section from "@/components/site/Section.astro";
+import SectionHeading from "@/components/site/SectionHeading.astro";
+import PageHero from "@/components/sections/PageHero.astro";
+import CtaBand from "@/components/sections/CtaBand.astro";
+import Faq from "@/components/islands/Faq";
+import Screenshot from "@/components/product/Screenshot.astro";
+import ShotCrop from "@/components/product/ShotCrop.astro";
+import FeatureRow from "@/components/product/FeatureRow.astro";
+import FeatureCard from "@/components/product/FeatureCard.astro";
+import FlowSteps from "@/components/product/FlowSteps.astro";
+import ShortcutGroups from "@/components/product/ShortcutGroups.astro";
+import Callout from "@/components/product/Callout.astro";
+import { breadcrumbJsonLd } from "@/components/product/jsonld";
+
+const routing = [
+	{
+		icon: "lucide:mail",
+		label: "A customer writes to support@",
+		note: "From any mail client or provider, to an address on your domain.",
+	},
+	{
+		icon: "lucide:route",
+		label: "Cloudflare Email Routing",
+		note: "A catch-all rule on your domain hands the message to your Worker. EmailFlare sets the rule up when you add a mailbox.",
+	},
+	{
+		icon: "lucide:cpu",
+		label: "Your Worker",
+		note: "Parses the message, sets bounce and complaint reports aside, and finds or creates the thread and the contact.",
+		accent: true,
+	},
+	{
+		icon: "lucide:database",
+		label: "Your mailbox",
+		note: "Messages go to D1, large bodies and attachments to R2. Browsers with the inbox open get a live push from a Durable Object.",
+	},
+];
+
+const triage = [
+	{
+		icon: "lucide:star",
+		title: "Star",
+		body: "Pin the threads you need to come back to. Starred is its own view, with a count.",
+	},
+	{
+		icon: "lucide:archive",
+		title: "Archive",
+		body: "Clear a thread without deleting it. A new reply brings it back to the inbox.",
+	},
+	{
+		icon: "lucide:mail-open",
+		title: "Mark as unread",
+		body: "Opening a thread marks it read. Mark it unread when you want it to stay on your list.",
+	},
+	{
+		icon: "lucide:sparkles",
+		title: "Canned replies",
+		body: "Insert a saved response from the reply box. They are created through the API for now, because the dashboard has no editor for them yet.",
+	},
+	{
+		icon: "lucide:contact",
+		title: "Contact history",
+		body: "Each sender becomes a contact scoped to the mailbox, so you see what you sent them and what they sent back in one place.",
+	},
+	{
+		icon: "lucide:flask-conical",
+		title: "Test mailbox",
+		body: "Mail sent with a test API key lands here instead of a real inbox. Use it in development, staging and CI.",
+	},
+];
+
+const shortcuts = [
+	{
+		title: "Navigate",
+		items: [
+			{ label: "Next thread", keys: [["J"], ["↓"]] },
+			{ label: "Previous thread", keys: [["K"], ["↑"]] },
+			{ label: "Search threads", keys: [["/"]] },
+			{ label: "Close thread", keys: [["Esc"]] },
+			{ label: "Show shortcuts", keys: [["?"]] },
+		],
+	},
+	{
+		title: "Act",
+		items: [
+			{ label: "Compose", keys: [["C"]] },
+			{ label: "Reply", keys: [["R"]] },
+			{ label: "Archive", keys: [["E"]] },
+			{ label: "Star", keys: [["S"]] },
+			{ label: "Mark as unread", keys: [["U"]] },
+			{ label: "Send reply", keys: [["⌘", "↵"]] },
+		],
+	},
+	{
+		title: "Go to",
+		items: [
+			{ label: "Command palette", keys: [["⌘", "K"]] },
+			{ label: "Inbox", keys: [["G", "I"]] },
+			{ label: "Test mailbox", keys: [["G", "T"]] },
+			{ label: "Activity logs", keys: [["G", "L"]] },
+			{ label: "Playground", keys: [["G", "P"]] },
+			{ label: "Team", keys: [["G", "U"]] },
+		],
+	},
+];
+
+const access = [
+	{
+		icon: "lucide:shield",
+		title: "Administrators",
+		body: "See every mailbox. Create mailboxes, assign people, manage domains, API keys and the rest of the workspace.",
+	},
+	{
+		icon: "lucide:users",
+		title: "Members",
+		body: "See only the mailboxes they are assigned to, and can send only from those addresses. Everyone else's mail stays out of view.",
+	},
+	{
+		icon: "lucide:key-round",
+		title: "Access types",
+		body: "Each member gets any of <code>inbox</code> for support, <code>api</code> for developers and <code>tester</code> for the test mailbox.",
+	},
+];
+
+const faq: FaqItem[] = [
+	{
+		q: "Can I assign a conversation to a teammate?",
+		a: "No. Mailboxes have members, and everyone in a mailbox sees its threads, but there is no per-thread owner or assignment yet.",
+	},
+	{
+		q: "Who can see which mailbox?",
+		a: "Administrators see all of them. A member sees only the mailboxes they are assigned to, and can send only from those addresses.",
+	},
+	{
+		q: "What happens to bounce and spam complaint reports?",
+		a: "They never become threads. The Worker reads the report, updates the original send in your logs and adds the address to your suppression list when the bounce is hard, repeated or a complaint.",
+	},
+	{
+		q: "Can scripts or tracking pixels in a message run?",
+		a: "No. HTML mail renders in a sandboxed frame with scripts disabled, and remote images are blocked until you choose to load them.",
+	},
+	sharedFaq[1],
+	sharedFaq[4],
+	sharedFaq[2],
+];
+---
+
+<Base
+	title="Shared team inbox for Cloudflare Email Routing"
+	description="A shared inbox for support@, billing@ and sales@ on your own domain. Threads update live, replies go out from the right address, and every message stays in your Cloudflare account."
+	path="/inbox"
+	jsonLd={[faqJsonLd(faq), breadcrumbJsonLd("Team inbox", "/inbox")]}
+>
+	<PageHero
+		eyebrow="Team inbox"
+		title="Reply from the address they wrote to."
+		description="A shared inbox for support@, billing@ and sales@ that runs in your Cloudflare account. Threads update live, and nothing lives in a vendor's database."
+	>
+		<a href={site.deploy} class={buttonVariants({ size: "xl" })}>
+			<Icon name="lucide:cloud-upload" />
+			Deploy to Cloudflare
+		</a>
+		<a href="#shortcuts" class={buttonVariants({ size: "xl", variant: "outline" })}>
+			See the shortcuts
+		</a>
+	</PageHero>
+
+	<Container class="py-14 md:py-20">
+		<div class="mx-auto max-w-6xl">
+			<Screenshot
+				file="inbox"
+				alt="The EmailFlare inbox with a thread list on the left and an open conversation on the right"
+				loading="eager"
+			/>
+		</div>
+	</Container>
+
+	<Section id="routing" tone="muted">
+		<SectionHeading
+			eyebrow="How routing works"
+			title="Cloudflare receives it. Your Worker files it."
+			description="There is no mail server to run. Cloudflare Email Routing delivers inbound mail straight to the Worker you deployed."
+		/>
+		<div class="mt-12">
+			<FlowSteps steps={routing} label="How inbound mail reaches a mailbox" />
+		</div>
+		<p class="text-muted-foreground mt-8 max-w-3xl text-sm leading-6">
+			When you reply, EmailFlare puts a token in the{" "}
+			<code class="bg-muted text-foreground rounded-md border px-1.5 py-0.5 font-mono text-[0.8125rem]">
+				Reply-To
+			</code>{" "}
+			address, so the customer's answer comes back to the same thread.
+		</p>
+	</Section>
+
+	<Section id="mailboxes">
+		<FeatureRow
+			eyebrow="Mailboxes"
+			title="One mailbox per address, one team behind each."
+			description="Create a mailbox for every address you answer: support@, billing@, sales@. Each one has its own members, and you can filter the whole inbox down to one."
+			points={[
+				"Add a mailbox and EmailFlare configures Email Routing for its domain, if your API token allows it",
+				"Assign the people who should see it",
+				"Switch between <strong>All mailboxes</strong> and a single address in one click",
+			]}
+		>
+			<ShotCrop
+				slot="media"
+				file="inbox"
+				alt="The inbox sidebar with Compose, Starred, Archived and the mailbox picker, next to the thread list"
+				x={0}
+				y={0}
+				w={900}
+				h={620}
+			/>
+		</FeatureRow>
+	</Section>
+
+	<Section id="threads" tone="muted">
+		<FeatureRow
+			reverse
+			eyebrow="Threads"
+			title="Conversations, not a pile of messages."
+			description="Replies group into threads with the mail you sent, so a customer's whole history reads top to bottom. New mail appears as it arrives, without a refresh."
+			points={[
+				"Live updates over a WebSocket, one Durable Object per signed-in user",
+				"Press <code>/</code> to search threads, or filter the list to unread",
+				"Attachments are listed on the message and stored in R2",
+			]}
+		>
+			<ShotCrop
+				slot="media"
+				file="inbox"
+				alt="A list of threads with sender, subject, preview and mailbox tags beside the open conversation"
+				x={320}
+				y={265}
+				w={880}
+				h={500}
+			/>
+		</FeatureRow>
+	</Section>
+
+	<Section id="safe">
+		<FeatureRow
+			eyebrow="Reading mail"
+			title="Open untrusted mail without trusting it."
+			description="HTML mail renders in a locked-down frame. Scripts do not run, and tracking pixels do not load until you say so."
+			points={[
+				"Remote images are blocked, with a banner and a <strong>Load images</strong> button",
+				"Switch any message between rich, plain text and source",
+				"A shield summarises the SPF, DKIM and DMARC results for the sender",
+			]}
+		>
+			<ShotCrop
+				slot="media"
+				file="inbox"
+				alt="An open message with an Authenticated badge showing the sender passed SPF, DKIM and DMARC"
+				x={824}
+				y={95}
+				w={820}
+				h={470}
+			/>
+		</FeatureRow>
+	</Section>
+
+	<Section id="workflow" tone="muted">
+		<SectionHeading
+			eyebrow="Daily work"
+			title="The small things that keep an inbox clear."
+			description="Each of these exists in the app today."
+		/>
+		<div class="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+			{triage.map((t) => (
+				<FeatureCard icon={t.icon} title={t.title} body={t.body} />
+			))}
+		</div>
+	</Section>
+
+	<Section id="shortcuts" tone="ink">
+		<SectionHeading
+			eyebrow="Keyboard shortcuts"
+			title="Work the queue without the mouse."
+			description="The keys below are the ones the app listens for. Press ? inside the inbox to see them again."
+			class="[&_p]:text-ink-muted [&_p:first-child]:!text-primary"
+		/>
+		<div class="mt-12">
+			<ShortcutGroups groups={shortcuts} />
+		</div>
+		<p class="text-ink-muted mt-6 text-sm">
+			Single-key shortcuts pause while you type in a field or have a dialog open. On Windows and Linux, use Ctrl
+			in place of ⌘.
+		</p>
+	</Section>
+
+	<Section id="access">
+		<SectionHeading
+			eyebrow="Roles and access"
+			title="Give people only the mailboxes they need."
+			description="Mailbox membership is checked on the server for every thread, contact and reply, not just hidden in the interface."
+		/>
+		<div class="mt-12 grid gap-5 md:grid-cols-3">
+			{access.map((a) => (
+				<FeatureCard icon={a.icon} title={a.title} body={a.body} />
+			))}
+		</div>
+	</Section>
+
+	<Section id="limits" tone="muted" size="narrow">
+		<Callout title="What it does not do yet" icon="lucide:circle-dashed">
+			<p>
+				The inbox covers the core of shared email. These are the gaps, so you can check them against your
+				workflow before you deploy.
+			</p>
+			<ul>
+				<li>
+					<strong>No thread assignment.</strong> Everyone in a mailbox sees every thread, and there is no
+					owner field or status such as open or done.
+				</li>
+				<li>
+					<strong>No help centre.</strong> There is no knowledge base, contact form or customer portal.
+				</li>
+				<li>
+					<strong>No canned reply editor.</strong> Saved responses work in the reply box, but you create them
+					through the API.
+				</li>
+				<li>
+					<strong>Cloudflare domains only.</strong> Inbound mail needs Email Routing, so the domain must be on
+					Cloudflare.
+				</li>
+			</ul>
+			<p>
+				If you want one of these,{" "}
+				<a href={`${site.repo}/issues`} target="_blank" rel="noopener">
+					open an issue
+				</a>{" "}
+				or send a pull request.
+			</p>
+		</Callout>
+	</Section>
+
+	<Section id="faq" size="narrow">
+		<SectionHeading align="center" eyebrow="FAQ" title="Inbox questions." />
+		<div class="mt-10">
+			<Faq client:visible items={faq} />
+		</div>
+		<p class="text-muted-foreground mt-8 flex flex-wrap items-center justify-center gap-2 text-center text-sm">
+			Also sending mail from your app?
+			<a
+				href="/email-api"
+				class="text-foreground inline-flex items-center gap-1 font-medium underline underline-offset-4"
+			>
+				Read about the email API <Icon name="lucide:arrow-right" class="size-4" />
+			</a>
+		</p>
+	</Section>
+
+	<CtaBand
+		title="Give your support address a shared home."
+		description="Deploy EmailFlare, add a mailbox and send a test message to it. It takes a few minutes, and the mail stays in your account."
+	/>
+</Base>

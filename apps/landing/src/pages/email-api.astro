@@ -1,0 +1,626 @@
+---
+import { Icon } from "astro-icon/components";
+import Base from "@/layouts/Base.astro";
+import { buttonVariants } from "@/components/ui/button";
+import { site } from "@/lib/site";
+import { faq as sharedFaq, faqJsonLd } from "@/lib/faq";
+import { highlight } from "@/lib/highlight";
+import type { FaqItem } from "@/components/islands/Faq";
+import Section from "@/components/site/Section.astro";
+import SectionHeading from "@/components/site/SectionHeading.astro";
+import CodeBlock from "@/components/site/CodeBlock.astro";
+import PageHero from "@/components/sections/PageHero.astro";
+import CtaBand from "@/components/sections/CtaBand.astro";
+import CodeTabs from "@/components/islands/CodeTabs";
+import Faq from "@/components/islands/Faq";
+import ShotCrop from "@/components/product/ShotCrop.astro";
+import FeatureRow from "@/components/product/FeatureRow.astro";
+import FeatureCard from "@/components/product/FeatureCard.astro";
+import FlowSteps from "@/components/product/FlowSteps.astro";
+import DataTable from "@/components/product/DataTable.astro";
+import { breadcrumbJsonLd } from "@/components/product/jsonld";
+
+const api = site.demoApi;
+
+const curl = `curl -X POST ${api}/v1/send \\
+  -H "Authorization: Bearer eflive_your_api_key" \\
+  -H "Content-Type: application/json" \\
+  -H "Idempotency-Key: welcome-alex-1" \\
+  -d '{
+    "from": "hello@yourdomain.com",
+    "fromName": "Acme",
+    "to": "alex@example.com",
+    "templateSlug": "welcome",
+    "variables": {
+      "name": "Alex",
+      "appName": "Acme",
+      "loginUrl": "https://app.acme.dev/login"
+    }
+  }'`;
+
+const ts = `const res = await fetch("${api}/v1/send", {
+  method: "POST",
+  headers: {
+    Authorization: \`Bearer \${process.env.EMAILFLARE_API_KEY}\`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "welcome-alex-1",
+  },
+  body: JSON.stringify({
+    from: "hello@yourdomain.com",
+    to: "alex@example.com",
+    templateSlug: "welcome",
+    variables: { name: "Alex", appName: "Acme", loginUrl: "https://app.acme.dev/login" },
+  }),
+});
+
+const { results } = await res.json();
+// results[0] is { to, cfId } on success, or { to, error } on failure`;
+
+const py = `import os, requests
+
+res = requests.post(
+    "${api}/v1/send",
+    headers={
+        "Authorization": f"Bearer {os.environ['EMAILFLARE_API_KEY']}",
+        "Idempotency-Key": "welcome-alex-1",
+    },
+    json={
+        "from": "hello@yourdomain.com",
+        "to": "alex@example.com",
+        "templateSlug": "welcome",
+        "variables": {"name": "Alex", "appName": "Acme", "loginUrl": "https://app.acme.dev/login"},
+    },
+)
+print(res.status_code, res.json()["results"])`;
+
+const go = `package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+)
+
+func main() {
+	payload, _ := json.Marshal(map[string]any{
+		"from":         "hello@yourdomain.com",
+		"to":           "alex@example.com",
+		"templateSlug": "welcome",
+		"variables": map[string]string{
+			"name": "Alex", "appName": "Acme", "loginUrl": "https://app.acme.dev/login",
+		},
+	})
+
+	req, _ := http.NewRequest("POST", "${api}/v1/send", bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer "+os.Getenv("EMAILFLARE_API_KEY"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "welcome-alex-1")
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer res.Body.Close()
+	fmt.Println(res.Status)
+}`;
+
+const tabs = [
+	{ id: "curl", label: "curl", code: curl, html: await highlight(curl, "bash") },
+	{ id: "ts", label: "TypeScript", code: ts, html: await highlight(ts, "ts") },
+	{ id: "py", label: "Python", code: py, html: await highlight(py, "python") },
+	{ id: "go", label: "Go", code: go, html: await highlight(go, "go") },
+];
+
+const response = `{
+  "results": [
+    {
+      "to": "alex@example.com",
+      "cfId": "b6c1e0f2-5a8e-4d1e-9c35-2f7a1d0e4a11"
+    }
+  ]
+}`;
+
+const lifecycle = [
+	{
+		icon: "lucide:key-round",
+		label: "Authenticate",
+		note: "The Bearer key is hashed and looked up. Revoked keys are rejected, and each key is limited to 100 requests a minute.",
+	},
+	{
+		icon: "lucide:layout-template",
+		label: "Prepare",
+		note: "Your template is found by slug or ID and rendered with your variables. The key's domain scope is checked against the sender.",
+	},
+	{
+		icon: "lucide:ban",
+		label: "Screen",
+		note: "Each recipient is checked against your suppression list. Suppressed addresses are skipped and reported in the response.",
+		accent: true,
+	},
+	{
+		icon: "lucide:send",
+		label: "Deliver and log",
+		note: "The message goes out through Cloudflare, with unsubscribe headers when you ask for them. The result is logged with its message ID.",
+	},
+];
+
+const requestFields = [
+	{
+		field: "from",
+		type: "string",
+		required: "Yes",
+		note: "Sender address on a domain you have set up. A key limited to certain domains can only send from those.",
+	},
+	{ field: "fromName", type: "string", required: "No", note: "Display name shown with the sender address." },
+	{
+		field: "to",
+		type: "string or string[]",
+		required: "Yes",
+		note: "One address or up to 50. Each recipient gets their own message, so recipients never see each other.",
+	},
+	{ field: "replyTo", type: "string", required: "No", note: "Address that replies go to." },
+	{
+		field: "subject",
+		type: "string",
+		required: "No",
+		note: "Required when you send raw `html` or `text`. With a template, it overrides the template subject.",
+	},
+	{ field: "html", type: "string", required: "No*", note: "HTML body." },
+	{ field: "text", type: "string", required: "No*", note: "Plain-text body." },
+	{
+		field: "templateSlug",
+		type: "string",
+		required: "No*",
+		note: "Slug of a built-in or custom template. Preferred over the ID.",
+	},
+	{ field: "templateId", type: "string", required: "No*", note: "Template ID, if you would rather reference that." },
+	{
+		field: "variables",
+		type: "object",
+		required: "No",
+		note: "Values for the template. Applied to the subject and, for custom templates, the body.",
+	},
+	{
+		field: "themeId",
+		type: "string",
+		required: "No",
+		note: "Colour theme for a built-in layout: `default`, `ocean`, `forest`, `violet` or `slate`.",
+	},
+	{
+		field: "listId",
+		type: "string",
+		required: "No",
+		note: "Marks the send as part of a list. Adds one-click unsubscribe headers and respects that list's unsubscribes.",
+	},
+	{
+		field: "listUnsubscribe",
+		type: "string",
+		required: "No",
+		note: "Your own unsubscribe URL, sent as the `List-Unsubscribe` header.",
+	},
+	{
+		field: "listUnsubscribePost",
+		type: "boolean",
+		required: "No",
+		note: "Adds `List-Unsubscribe-Post` for RFC 8058 one-click.",
+	},
+	{ field: "track", type: "boolean", required: "No", note: "Opt in to open and click tracking. Off by default." },
+	{
+		field: "sendAt",
+		type: "ISO 8601 string",
+		required: "No",
+		note: "Deliver later. A time in the past, or within a few seconds, sends immediately.",
+	},
+];
+
+const headerRows = [
+	{
+		field: "Authorization",
+		value: "`Bearer YOUR_KEY`",
+		note: "Required. Live keys start with `eflive_`, test keys with `eftest_`.",
+	},
+	{ field: "Content-Type", value: "`application/json`", note: "Required." },
+	{
+		field: "Idempotency-Key",
+		value: "any string",
+		note: "Optional. A repeat of the same key for the same API key returns the first result instead of sending again.",
+	},
+];
+
+const statusRows = [
+	{
+		status: "200",
+		meaning:
+			"Processed. `results` has one entry per recipient, with `cfId` on success or `error` on failure. A replayed idempotency key adds `cached: true`.",
+	},
+	{ status: "202", meaning: "Scheduled. The body has `scheduled: true`, an `id` and the `sendAt` time." },
+	{
+		status: "400",
+		meaning: "The payload failed validation, for example an invalid address or no template, `html` or `text`.",
+	},
+	{ status: "401", meaning: "The key is missing, unknown or revoked." },
+	{ status: "403", meaning: "The key is not allowed to send from that domain." },
+	{ status: "404", meaning: "The template slug or ID does not exist." },
+	{ status: "429", meaning: "More than 100 requests in a minute for this key." },
+	{ status: "502", meaning: "Every recipient failed. Read `results` for the reason per address." },
+];
+
+const scopes = [
+	{
+		icon: "lucide:globe",
+		title: "Global",
+		body: "Send from any domain in the workspace. Use it for your main backend.",
+	},
+	{
+		icon: "lucide:mail",
+		title: "One domain",
+		body: "Send only from a single domain. Good for a product or client that should not touch the others.",
+	},
+	{ icon: "lucide:layers", title: "Several domains", body: "Pick the exact set of domains a key may use." },
+	{
+		icon: "lucide:flask-conical",
+		title: "Test keys",
+		body: "Prefixed <code>eftest_</code>. Nothing is delivered. The rendered message lands in the test mailbox, so you can run the real code path in CI.",
+	},
+];
+
+const customTemplate = `Hi {{name}},
+
+{{#if trialDays}}
+  Your trial ends in {{trialDays}} days.
+{{else}}
+  Thanks for being a customer.
+{{/if}}
+
+{{plan.name}} plan, renewing {{plan.renewsOn}}.`;
+
+const deliverability = [
+	{
+		icon: "lucide:mail-warning",
+		title: "Bounce classification",
+		body: "Bounce reports that reach your domain are read for their status code. Hard bounces and spam rejections suppress the address at once. Soft bounces suppress it after three in 30 days.",
+	},
+	{
+		icon: "lucide:flag",
+		title: "Complaints",
+		body: "Spam complaint reports are matched back to the original send, marked <code>complained</code> in your logs, and the address is suppressed.",
+	},
+	{
+		icon: "lucide:shield-ban",
+		title: "Suppression list",
+		body: "Every recipient is checked before every send. You can add addresses by hand, import a CSV and export the list.",
+	},
+	{
+		icon: "lucide:unlink",
+		title: "One-click unsubscribe",
+		body: "Send with a <code>listId</code> and EmailFlare issues a token and adds List-Unsubscribe and List-Unsubscribe-Post headers, as RFC 8058 describes.",
+	},
+];
+
+const webhookExample = `{
+  "id": "Zk3p0...",
+  "event": "email.sent",
+  "created_at": "2026-11-21T09:18:19.000Z",
+  "data": {
+    "id": "Qm8c1...",
+    "to": "alex@example.com",
+    "from": "hello@yourdomain.com",
+    "subject": "Welcome to Acme, Alex!"
+  }
+}`;
+
+const verify = `import { createHmac, timingSafeEqual } from "node:crypto";
+
+export function isValid(rawBody: string, signature: string, secret: string) {
+  const expected = createHmac("sha256", secret)
+    .update(rawBody)
+    .digest("hex");
+  const a = Buffer.from(expected);
+  const b = Buffer.from(signature);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+// signature: the X-EmailFlare-Signature header`;
+
+const limits = [
+	{
+		limit: "Request rate",
+		value: "100 per minute per API key",
+		note: "Set by the rate limiting binding in your Wrangler config, so you can change it. If the binding is absent, requests are not limited.",
+	},
+	{ limit: "Recipients", value: "50 per request", note: "Send more by making more requests." },
+	{
+		limit: "Daily ceiling",
+		value: "`CF_DAILY_LIMIT`, default 1000",
+		note: "The figure the overview compares your sends against. Set it to match your Cloudflare plan. EmailFlare does not enforce it, and Cloudflare applies the limits of your plan.",
+	},
+	{
+		limit: "Scheduling",
+		value: "`sendAt` on live keys",
+		note: "Scheduled sends run through a queue. Test keys ignore `sendAt` and capture the message right away.",
+	},
+];
+
+const faq: FaqItem[] = [
+	{
+		q: "Is there an SDK?",
+		a: "Not yet. It is a plain JSON API over HTTPS, so any HTTP client works. The examples above are the whole integration.",
+	},
+	{
+		q: "What happens if I send to a suppressed address?",
+		a: "That recipient is skipped. The response lists it with an error such as <code>Suppressed: hard_bounce</code>, and other recipients in the same request still send.",
+	},
+	{
+		q: "Do unsubscribes block my password resets?",
+		a: "No. Bounces, complaints and manual suppressions block everything, but an unsubscribe only blocks sends tagged with that list, or marketing sequences. Transactional mail without a <code>listId</code> still goes out.",
+	},
+	{
+		q: "How do I test without sending real mail?",
+		a: "Create a test key and use it exactly like a live key. Messages are rendered and stored in the test mailbox instead of being delivered. The playground in the dashboard does the same without a key.",
+	},
+	sharedFaq[3],
+	sharedFaq[0],
+	sharedFaq[1],
+];
+---
+
+<Base
+	title="Transactional email API on Cloudflare"
+	description="Send transactional email with one POST to /v1/send. Scoped API keys, templates, bounce and complaint handling, suppressions, one-click unsubscribe, logs and webhooks, all running in your own Cloudflare account."
+	path="/email-api"
+	jsonLd={[faqJsonLd(faq), breadcrumbJsonLd("Email API", "/email-api")]}
+>
+	<PageHero
+		eyebrow="Email API"
+		title="Send with one request."
+		description="POST to /v1/send from any language. Templates, scoped keys, bounce handling and logs come with it, and every message leaves through your own Cloudflare account."
+	>
+		<a href="/docs/send-an-email" class={buttonVariants({ size: "xl" })}>
+			Send your first email
+			<Icon name="lucide:arrow-right" />
+		</a>
+		<a href={site.deploy} class={buttonVariants({ size: "xl", variant: "outline" })}>
+			<Icon name="lucide:cloud-upload" />
+			Deploy to Cloudflare
+		</a>
+	</PageHero>
+
+	<Section id="send">
+		<div class="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] lg:gap-14">
+			<div class="min-w-0">
+				<SectionHeading
+					eyebrow="POST /v1/send"
+					title="One endpoint, any language."
+					description="Authenticate with a Bearer key, name a template and pass variables. Or send raw HTML or text. Replace the host with your own Worker's URL."
+					class="[&_h2]:text-3xl md:[&_h2]:text-4xl"
+				/>
+				<p class="text-muted-foreground mt-8 mb-3 text-sm font-medium">What comes back</p>
+				<CodeBlock code={response} lang="json" title="200 OK" />
+				<p class="text-muted-foreground mt-4 text-sm leading-6">
+					<code class="bg-muted text-foreground rounded-md border px-1.5 py-0.5 font-mono text-[0.8125rem]">
+						cfId
+					</code>{" "}
+					is the Cloudflare message ID. It is also what you search for in the activity logs.
+				</p>
+			</div>
+			<div class="min-w-0">
+				<CodeTabs client:visible tabs={tabs} title="POST /v1/send" />
+			</div>
+		</div>
+	</Section>
+
+	<Section id="lifecycle" tone="muted">
+		<SectionHeading
+			eyebrow="Inside a request"
+			title="What happens between your POST and the inbox."
+			description="Four steps, all inside your Worker. Nothing is forwarded to a third-party sending service."
+		/>
+		<div class="mt-12">
+			<FlowSteps steps={lifecycle} label="What happens to a send request" />
+		</div>
+	</Section>
+
+	<Section id="reference">
+		<SectionHeading
+			eyebrow="Reference"
+			title="Request fields."
+			description="Send JSON. Unknown fields are ignored. At least one of templateSlug, templateId, html or text is required."
+		/>
+		<div class="mt-10">
+			<DataTable
+				caption="Request body fields"
+				columns={[
+					{ key: "field", label: "Field" },
+					{ key: "type", label: "Type", class: "whitespace-nowrap" },
+					{ key: "required", label: "Required" },
+					{ key: "note", label: "Notes" },
+				]}
+				rows={requestFields}
+			/>
+			<p class="text-muted-foreground mt-3 text-sm">* Provide at least one of these four.</p>
+		</div>
+
+		<h3 class="mt-14 mb-4 text-2xl font-semibold">Headers</h3>
+		<DataTable
+			caption="Request headers"
+			columns={[
+				{ key: "field", label: "Header" },
+				{ key: "value", label: "Value", class: "whitespace-nowrap" },
+				{ key: "note", label: "Notes" },
+			]}
+			rows={headerRows}
+		/>
+
+		<h3 class="mt-14 mb-4 text-2xl font-semibold">Responses</h3>
+		<DataTable
+			caption="Response status codes"
+			columns={[
+				{ key: "status", label: "Status" },
+				{ key: "meaning", label: "Meaning" },
+			]}
+			rows={statusRows}
+		/>
+		<p class="text-muted-foreground mt-6 text-sm">
+			Full guides live in the{" "}
+			<a href="/docs" class="text-foreground underline underline-offset-4">
+				docs
+			</a>
+			, starting with{" "}
+			<a href="/docs/send-an-email" class="text-foreground underline underline-offset-4">
+				send an email
+			</a>
+			.
+		</p>
+	</Section>
+
+	<Section id="keys" tone="muted">
+		<SectionHeading
+			eyebrow="API keys"
+			title="Give each service the access it needs."
+			description="Administrators create keys in the dashboard. The full key is shown once, only its hash is stored, and you can revoke it at any time."
+		/>
+		<div class="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+			{scopes.map((s) => (
+				<FeatureCard icon={s.icon} title={s.title} body={s.body} />
+			))}
+		</div>
+	</Section>
+
+	<Section id="templates">
+		<FeatureRow
+			eyebrow="Templates and variables"
+			title="Keep the email out of your code."
+			description="Send by slug and pass variables. Use one of the built-in layouts, or write your own with variables and conditionals."
+			points={[
+				"Built-in layouts take a <code>themeId</code> to change colours",
+				"Custom templates support <code>{{name}}</code>, nested paths like <code>{{plan.name}}</code>, and <code>if</code>, <code>else</code> and <code>unless</code> blocks",
+				"Missing variables render as empty text, never as <code>{{name}}</code>",
+			]}
+		>
+			<a href="/templates" class={buttonVariants({ size: "lg", variant: "outline" }) + " mt-8"}>
+				Browse the template library
+			</a>
+			<div slot="media" class="min-w-0">
+				<CodeBlock code={customTemplate} lang="handlebars" title="custom template body" />
+			</div>
+		</FeatureRow>
+	</Section>
+
+	<Section id="deliverability" tone="muted">
+		<SectionHeading
+			eyebrow="Deliverability"
+			title="Protect your sender reputation by default."
+			description="Bounces and complaints arrive through Cloudflare Email Routing, so the same Worker that sends your mail also listens for what went wrong."
+		/>
+		<div class="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+			{deliverability.map((d) => (
+				<FeatureCard icon={d.icon} title={d.title} body={d.body} />
+			))}
+		</div>
+	</Section>
+
+	<Section id="observability">
+		<FeatureRow
+			eyebrow="Logs and webhooks"
+			title="Know what happened to every message."
+			description="Each send is a log row with its status, error and Cloudflare message ID. Search by recipient, sender or subject, and filter to failures."
+			points={[
+				"Statuses: pending, sent, failed, bounced and complained",
+				"Open a message to see its envelope, metadata and raw event JSON",
+				"Webhooks fire on <code>email.sent</code>, <code>email.failed</code>, <code>email.opened</code> and <code>email.clicked</code>",
+				"Each webhook is signed with HMAC SHA-256 in the <code>X-EmailFlare-Signature</code> header",
+			]}
+			reverse
+		>
+			<ShotCrop
+				slot="media"
+				file="logs"
+				alt="The activity log with a list of sends and the open message's envelope"
+				x={320}
+				y={60}
+				w={960}
+				h={560}
+			/>
+		</FeatureRow>
+		<div class="mt-12 grid gap-5 lg:grid-cols-2">
+			<CodeBlock code={webhookExample} lang="json" title="Webhook payload" />
+			<CodeBlock code={verify} lang="ts" title="Verify the signature" />
+		</div>
+	</Section>
+
+	<Section id="playground" tone="muted">
+		<div class="grid items-center gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)] lg:gap-14">
+			<div>
+				<SectionHeading
+					eyebrow="Playground and test mailbox"
+					title="Try a send before you write any code."
+					description="Pick a template and a theme, fill in the variables and see the rendered email. Send it to the sandbox, or to a real address when you are ready."
+					class="[&_h2]:text-3xl md:[&_h2]:text-4xl"
+				/>
+				<ul class="text-muted-foreground mt-6 space-y-3 text-[0.9375rem] leading-6">
+					<li class="flex gap-3">
+						<Icon name="lucide:check" class="text-primary mt-1 size-4 shrink-0" /> Test sandbox mode needs
+						no API key
+					</li>
+					<li class="flex gap-3">
+						<Icon name="lucide:check" class="text-primary mt-1 size-4 shrink-0" /> Generates client code for
+						the request you built
+					</li>
+					<li class="flex gap-3">
+						<Icon name="lucide:check" class="text-primary mt-1 size-4 shrink-0" /> Test mail appears in the
+						test mailbox, never in a real inbox
+					</li>
+				</ul>
+			</div>
+			<ShotCrop
+				file="playground"
+				alt="The API playground with a template picker, variable fields and a live preview of the rendered email"
+				x={330}
+				y={175}
+				w={1000}
+				h={560}
+			/>
+		</div>
+	</Section>
+
+	<Section id="limits">
+		<SectionHeading
+			eyebrow="Limits"
+			title="The numbers, plainly."
+			description="Cloudflare sets the ceiling for what your account can send. These are the limits EmailFlare adds or reports on."
+		/>
+		<div class="mt-10">
+			<DataTable
+				caption="Limits"
+				columns={[
+					{ key: "limit", label: "Limit" },
+					{ key: "value", label: "Value" },
+					{ key: "note", label: "Notes" },
+				]}
+				rows={limits}
+			/>
+		</div>
+	</Section>
+
+	<Section id="faq" tone="muted" size="narrow">
+		<SectionHeading align="center" eyebrow="FAQ" title="API questions." />
+		<div class="mt-10">
+			<Faq client:visible items={faq} />
+		</div>
+		<p class="text-muted-foreground mt-8 flex flex-wrap items-center justify-center gap-2 text-center text-sm">
+			Replies from customers?
+			<a
+				href="/inbox"
+				class="text-foreground inline-flex items-center gap-1 font-medium underline underline-offset-4"
+			>
+				See the team inbox <Icon name="lucide:arrow-right" class="size-4" />
+			</a>
+		</p>
+	</Section>
+
+	<CtaBand
+		title="Send your first email from your own account."
+		description="Deploy EmailFlare, add a domain, create a key and call /v1/send. Your mail never leaves your Cloudflare account."
+	/>
+</Base>

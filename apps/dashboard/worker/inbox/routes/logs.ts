@@ -1,0 +1,90 @@
+import { Hono } from "hono";
+import { parsePagination } from "@/lib/core";
+import { D1Db } from "../db.ts";
+import type { HonoEnv } from "../env.ts";
+
+const app = new Hono<HonoEnv>();
+
+// GET /api/logs?page=1&limit=50&domainId=&status=&templateId=&apiKeyId=&search=&from=&to=
+app.get("/", async (c) => {
+	const { page, limit, offset } = parsePagination({ page: c.req.query("page"), limit: c.req.query("limit") });
+	const domainId = c.req.query("domainId");
+	const status = c.req.query("status");
+	const templateId = c.req.query("templateId");
+	const apiKeyId = c.req.query("apiKeyId");
+	const search = c.req.query("search");
+	const fromDate = c.req.query("from");
+	const toDate = c.req.query("to");
+	const isTest = c.req.query("isTest");
+
+	const conditions: string[] = [];
+	const params: unknown[] = [];
+
+	if (isTest === "1" || isTest === "true") {
+		conditions.push("is_test = 1");
+	} else if (isTest === "0" || isTest === "false") {
+		conditions.push("is_test = 0");
+	}
+
+	if (domainId) {
+		conditions.push("domain_id = ?");
+		params.push(domainId);
+	}
+	if (status) {
+		conditions.push("status = ?");
+		params.push(status);
+	}
+	if (templateId) {
+		conditions.push("template_id = ?");
+		params.push(templateId);
+	}
+	if (apiKeyId) {
+		conditions.push("api_key_id = ?");
+		params.push(apiKeyId);
+	}
+	if (fromDate) {
+		conditions.push("sent_at >= ?");
+		params.push(fromDate);
+	}
+	if (toDate) {
+		conditions.push("sent_at <= ?");
+		params.push(toDate);
+	}
+	if (search) {
+		conditions.push("(to_address LIKE ? OR from_address LIKE ? OR subject LIKE ?)");
+		const like = `%${search}%`;
+		params.push(like, like, like);
+	}
+
+	const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+	const db = new D1Db(c.env.DB);
+
+	const [dataResult, countResult] = await Promise.all([
+		db.query(
+			`SELECT id, to_address, from_address, subject, status, cf_message_id, domain_id, template_id, error, is_test, sent_at
+       FROM email_logs ${where} ORDER BY sent_at DESC LIMIT ? OFFSET ?`,
+			[...params, limit, offset],
+		),
+		db.query<{ total: number }>(`SELECT COUNT(*) as total FROM email_logs ${where}`, params),
+	]);
+
+	const total = countResult.rows[0]?.total ?? 0;
+
+	return c.json({
+		data: dataResult.rows,
+		total,
+		page,
+		limit,
+		pages: Math.ceil(total / limit),
+	});
+});
+
+// GET /api/logs/:id
+app.get("/:id", async (c) => {
+	const db = new D1Db(c.env.DB);
+	const row = await c.env.DB.prepare("SELECT * FROM email_logs WHERE id = ? LIMIT 1").bind(c.req.param("id")).first();
+	if (!row) return c.json({ error: "Log not found" }, 404);
+	return c.json(row);
+});
+
+export default app;

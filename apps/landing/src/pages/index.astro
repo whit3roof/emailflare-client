@@ -1,0 +1,542 @@
+---
+import { Icon } from "astro-icon/components";
+import Base from "@/layouts/Base.astro";
+import { buttonVariants } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { site } from "@/lib/site";
+import { faq, faqJsonLd } from "@/lib/faq";
+import { highlight } from "@/lib/highlight";
+import Container from "@/components/site/Container.astro";
+import Section from "@/components/site/Section.astro";
+import SectionHeading from "@/components/site/SectionHeading.astro";
+import MailHeader from "@/components/site/MailHeader.astro";
+import MailRow from "@/components/site/MailRow.astro";
+import Architecture from "@/components/sections/Architecture.astro";
+import DeploySteps from "@/components/sections/DeploySteps.astro";
+import SponsorBand from "@/components/sections/SponsorBand.astro";
+import CtaBand from "@/components/sections/CtaBand.astro";
+import ProductTour from "@/components/islands/ProductTour";
+import CodeTabs from "@/components/islands/CodeTabs";
+import Faq from "@/components/islands/Faq";
+
+const builtOn = ["Workers", "D1", "R2", "Queues", "KV", "Durable Objects", "Email Routing"];
+
+const usual = [
+	"A sending API that bills per email",
+	"A shared inbox that bills per seat",
+	"App mail and customer replies in different tools",
+	"Your contacts and history held by someone else",
+];
+const emailflare = [
+	"Sending and receiving in one deployment",
+	"Cloudflare usage pricing, no per-seat fee",
+	"One thread view for what you sent and what they replied",
+	"Every message in your own D1 and R2",
+];
+
+const products = [
+	{
+		icon: "lucide:send",
+		title: "Send API",
+		lead: "Send with one request.",
+		href: "/email-api",
+		points: [
+			"Scoped keys for one domain or the whole workspace",
+			"Templates with variables, or raw HTML",
+			"Bounces and complaints suppressed automatically, unsubscribes honoured per list",
+			"Searchable logs with Cloudflare message IDs",
+		],
+	},
+	{
+		icon: "lucide:inbox",
+		title: "Team inbox",
+		lead: "Reply from the address they wrote to.",
+		href: "/inbox",
+		points: [
+			"One mailbox per address: support@, billing@, sales@",
+			"Threads that update live as mail arrives",
+			"Star, archive, mark unread, canned replies, shortcuts",
+			"HTML mail in a sandboxed frame with remote images blocked until you allow them",
+		],
+	},
+	{
+		icon: "lucide:users",
+		title: "Workspace",
+		lead: "Run it with a team.",
+		href: "/docs",
+		points: [
+			"Roles for support, developers and testers",
+			"Domain setup that lists the DNS records Cloudflare needs",
+			"Webhooks, audit log and two-factor sign-in",
+			"Sequences for scheduled, multi-step email",
+		],
+	},
+];
+
+const tour = [
+	{
+		id: "inbox",
+		label: "Inbox",
+		file: "inbox",
+		title: "A shared inbox that feels like mail",
+		body: "Threads, search, unread filters and a reply box that stays out of the way. Keyboard shortcuts cover compose, reply, star and archive.",
+		alt: "The EmailFlare inbox showing a thread list and an open conversation",
+	},
+	{
+		id: "overview",
+		label: "Overview",
+		file: "overview",
+		title: "See what sent, and what failed",
+		body: "Daily sends, delivery rate and your quota at a glance, with a volume chart for the last day, week or month.",
+		alt: "The EmailFlare overview dashboard with send volume chart",
+	},
+	{
+		id: "templates",
+		label: "Templates",
+		file: "templates",
+		title: "Fifty layouts to start from",
+		body: "Pick a built-in layout and a theme, or write your own template with variables, then preview it live before you send.",
+		alt: "The template library",
+	},
+	{
+		id: "playground",
+		label: "Playground",
+		file: "playground",
+		title: "Test a send without leaving the dashboard",
+		body: "Build a request, pick a template and send it into the sandboxed test mailbox. Nothing reaches a real inbox until you choose.",
+		alt: "The API playground",
+	},
+	{
+		id: "logs",
+		label: "Logs",
+		file: "logs",
+		title: "Every send, searchable",
+		body: 'Statuses, message IDs, errors and raw events for each message, so a customer\'s "I never got it" has an answer.',
+		alt: "The activity log",
+	},
+	{
+		id: "domains",
+		label: "Domains",
+		file: "domains",
+		title: "Domain setup that tells you what's missing",
+		body: "Add a domain and see which DNS records are still missing, with the values to add.",
+		alt: "Domain setup and DNS checks",
+	},
+];
+
+const curl = `curl -X POST ${site.demoApi}/v1/send \\
+  -H "Authorization: Bearer eflive_your_api_key" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "from": "hello@yourdomain.com",
+    "to": "alex@example.com",
+    "subject": "Welcome aboard",
+    "templateId": "welcome-email",
+    "variables": { "name": "Alex" }
+  }'`;
+const ts = `const res = await fetch("${site.demoApi}/v1/send", {
+  method: "POST",
+  headers: {
+    Authorization: \`Bearer \${process.env.EMAILFLARE_API_KEY}\`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    from: "hello@yourdomain.com",
+    to: "alex@example.com",
+    subject: "Your receipt",
+    html: "<p>Thanks for your purchase.</p>",
+  }),
+});
+
+const { results } = await res.json();
+console.log(results[0].cfId);`;
+const py = `import os, requests
+
+res = requests.post(
+    "${site.demoApi}/v1/send",
+    headers={"Authorization": f"Bearer {os.environ['EMAILFLARE_API_KEY']}"},
+    json={
+        "from": "hello@yourdomain.com",
+        "to": "alex@example.com",
+        "subject": "Your receipt",
+        "html": "<p>Thanks for your purchase.</p>",
+    },
+)
+print(res.json()["results"][0]["cfId"])`;
+
+const apiTabs = [
+	{ id: "curl", label: "curl", code: curl, html: await highlight(curl, "bash") },
+	{ id: "ts", label: "TypeScript", code: ts, html: await highlight(ts, "ts") },
+	{ id: "py", label: "Python", code: py, html: await highlight(py, "python") },
+];
+
+const template = `<h1>Welcome, {{name}}</h1>
+
+{{#if trialDays}}
+  <p>Your trial ends in {{trialDays}} days.</p>
+{{/if}}
+
+<a href="{{actionUrl}}">Get started</a>`;
+const templateHtml = await highlight(template, "handlebars");
+
+const trust = [
+	{
+		icon: "lucide:key-round",
+		title: "Scoped API keys",
+		body: "Limit a key to one domain, or one purpose, instead of handing out the whole workspace.",
+	},
+	{
+		icon: "lucide:shield-check",
+		title: "Roles and two-factor",
+		body: "Support, developer and tester roles, TOTP sign-in and an audit log of who did what.",
+	},
+	{
+		icon: "lucide:frame",
+		title: "Sandboxed HTML mail",
+		body: "Inbound HTML renders in a locked-down frame. Remote images stay blocked until you allow them.",
+	},
+	{
+		icon: "lucide:ban",
+		title: "Deliverability guardrails",
+		body: "Hard bounces and complaints suppress future sends, unsubscribes are honoured per list, and list mail carries one-click unsubscribe headers.",
+	},
+];
+---
+
+<Base
+	title="EmailFlare · Email API and team inbox for Cloudflare"
+	description={site.description}
+	path="/"
+	jsonLd={[
+		faqJsonLd(),
+		{
+			"@context": "https://schema.org",
+			"@type": "SoftwareApplication",
+			name: "EmailFlare",
+			applicationCategory: "BusinessApplication",
+			operatingSystem: "Cloudflare Workers",
+			offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+			license: site.license.url,
+			url: site.url,
+			codeRepository: site.repo,
+		},
+	]}
+>
+	<!-- Hero -->
+	<div class="from-primary-muted/60 overflow-hidden bg-gradient-to-b to-transparent">
+		<Container class="pt-14 pb-10 md:pt-24">
+			<div class="mx-auto max-w-5xl">
+				<MailHeader>
+					<MailRow name="From">you@yourdomain.com</MailRow>
+					<MailRow name="To">your customers, your team</MailRow>
+					<MailRow name="Subject" subject>
+						Email that runs on <span class="text-primary">your</span> Cloudflare account.
+					</MailRow>
+					<MailRow name="Received">by your-worker.workers.dev with D1, R2, Queues and KV</MailRow>
+				</MailHeader>
+				<div class="mt-8 max-w-2xl">
+					<p class="text-muted-foreground text-lg leading-8 md:text-xl md:leading-9">
+						EmailFlare is a send API and a shared team inbox in one Worker you host yourself. Your domains,
+						your mailboxes and every message stay in your own account.
+					</p>
+					<div class="mt-8 flex flex-wrap items-center gap-3">
+						<a href={site.deploy} class={buttonVariants({ size: "xl" })}>
+							<Icon name="lucide:cloud-upload" />
+							Deploy to Cloudflare
+						</a>
+						<a href="/docs" class={buttonVariants({ size: "xl", variant: "outline" })}>
+							Read the docs
+							<Icon name="lucide:arrow-right" />
+						</a>
+					</div>
+					<p class="text-muted-foreground mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+						<span class="inline-flex items-center gap-1.5">
+							<Icon name="lucide:scale" class="size-4" /> Source-available, free to self-host
+						</span>
+						<span class="inline-flex items-center gap-1.5">
+							<Icon name="lucide:lock-keyhole" class="size-4" /> No hosted service
+						</span>
+						<span class="inline-flex items-center gap-1.5">
+							<Icon name="lucide:cloud" class="size-4" /> Your account, your data
+						</span>
+					</p>
+				</div>
+			</div>
+
+			<div class="mx-auto mt-16 max-w-6xl">
+				<div class="stamp">
+					<img
+						src="/shots/inbox-light.webp"
+						alt="The EmailFlare team inbox with a conversation open"
+						width="1800"
+						height="1125"
+						class="border-border block w-full rounded-sm border dark:hidden"
+					/>
+					<img
+						src="/shots/inbox-dark.webp"
+						alt="The EmailFlare team inbox with a conversation open, in dark mode"
+						width="1800"
+						height="1125"
+						class="border-border hidden w-full rounded-sm border dark:block"
+					/>
+				</div>
+			</div>
+		</Container>
+	</div>
+
+	<!-- Built on -->
+	<Container class="py-10">
+		<p class="text-muted-foreground mb-4 text-center font-mono text-xs tracking-wide uppercase">
+			Built on Cloudflare
+		</p>
+		<ul class="flex flex-wrap justify-center gap-2">
+			{builtOn.map((b) => (
+				<li>
+					<Badge variant="outline" class="h-7 px-3 text-sm">
+						{b}
+					</Badge>
+				</li>
+			))}
+		</ul>
+	</Container>
+
+	<!-- Why -->
+	<Section id="why">
+		<SectionHeading
+			eyebrow="Why EmailFlare"
+			title="Most email tools split your story in two."
+			description="Sending lives in one product and replies in another, and you pay twice to keep them apart. Cloudflare already provides the pieces. EmailFlare is the application on top."
+		/>
+		<div class="mt-12 grid gap-5 md:grid-cols-2">
+			<Card className="bg-muted/50 shadow-none">
+				<CardContent className="p-7">
+					<p class="text-muted-foreground mb-5 font-mono text-xs tracking-wide uppercase">The usual stack</p>
+					<ul class="space-y-3.5">
+						{usual.map((u) => (
+							<li class="text-muted-foreground flex gap-3 text-[0.9375rem] leading-6">
+								<Icon name="lucide:x" class="text-destructive mt-1 size-4 shrink-0" />
+								{u}
+							</li>
+						))}
+					</ul>
+				</CardContent>
+			</Card>
+			<Card className="border-primary/40 shadow-stamp">
+				<CardContent className="p-7">
+					<p class="text-primary-muted-foreground mb-5 font-mono text-xs tracking-wide uppercase">
+						With EmailFlare
+					</p>
+					<ul class="space-y-3.5">
+						{emailflare.map((u) => (
+							<li class="flex gap-3 text-[0.9375rem] leading-6 font-medium">
+								<Icon name="lucide:check" class="text-success mt-1 size-4 shrink-0" />
+								{u}
+							</li>
+						))}
+					</ul>
+					<a
+						href="/compare"
+						class="text-primary-muted-foreground mt-6 inline-flex items-center gap-1 text-sm font-medium underline underline-offset-4"
+					>
+						See the full comparison <Icon name="lucide:arrow-right" class="size-4" />
+					</a>
+				</CardContent>
+			</Card>
+		</div>
+	</Section>
+
+	<!-- What's included -->
+	<Section id="features" tone="muted">
+		<SectionHeading
+			eyebrow="What's included"
+			title="Three products, one deployment."
+			description="Send transactional mail, answer customers and manage your domains from the same dashboard and the same data."
+		/>
+		<div class="mt-12 grid gap-5 lg:grid-cols-3">
+			{products.map((p) => (
+				<Card className="group">
+					<CardContent className="flex flex-1 flex-col p-7">
+						<span class="bg-primary-muted text-primary-muted-foreground mb-5 inline-flex size-10 items-center justify-center rounded-xl">
+							<Icon name={p.icon} class="size-5" />
+						</span>
+						<p class="text-muted-foreground font-mono text-xs tracking-wide uppercase">{p.title}</p>
+						<h3 class="mt-1 text-2xl font-semibold">{p.lead}</h3>
+						<ul class="mt-5 space-y-3">
+							{p.points.map((pt) => (
+								<li class="text-muted-foreground flex gap-2.5 text-sm leading-6">
+									<Icon name="lucide:check" class="text-primary mt-1 size-4 shrink-0" />
+									{pt}
+								</li>
+							))}
+						</ul>
+						<a
+							href={p.href}
+							class="text-foreground mt-auto inline-flex items-center gap-1 pt-6 text-sm font-medium underline-offset-4 hover:underline"
+						>
+							Learn more{" "}
+							<Icon
+								name="lucide:arrow-right"
+								class="size-4 transition-transform group-hover:translate-x-0.5"
+							/>
+						</a>
+					</CardContent>
+				</Card>
+			))}
+		</div>
+	</Section>
+
+	<!-- Product tour -->
+	<Section id="tour">
+		<SectionHeading
+			align="center"
+			eyebrow="The dashboard"
+			title="Built to be used every day."
+			description="Real screens from a running instance. Light and dark follow your system or the toggle above."
+		/>
+		<div class="mt-12">
+			<ProductTour client:visible shots={tour} />
+		</div>
+	</Section>
+
+	<!-- API -->
+	<Section id="api">
+		<div class="grid items-center gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+			<div>
+				<SectionHeading
+					eyebrow="Send API"
+					title="One endpoint. Your keys, your domain."
+					description="Call POST /v1/send from any language. Pass a template and variables, or send raw HTML. Every request is logged, and every bounce updates your suppression list."
+				/>
+				<ul class="text-muted-foreground mt-7 space-y-3 text-[0.9375rem]">
+					<li class="flex gap-3">
+						<Icon name="lucide:key-round" class="text-primary mt-1 size-4 shrink-0" /> Keys scoped to a
+						domain or the whole workspace
+					</li>
+					<li class="flex gap-3">
+						<Icon name="lucide:flask-conical" class="text-primary mt-1 size-4 shrink-0" /> A test mailbox
+						that captures mail in dev and CI
+					</li>
+					<li class="flex gap-3">
+						<Icon name="lucide:unlink" class="text-primary mt-1 size-4 shrink-0" /> One-click unsubscribe
+						headers (RFC 8058) built in
+					</li>
+				</ul>
+				<div class="mt-8 flex flex-wrap gap-3">
+					<a href="/email-api" class={buttonVariants({ size: "lg" })}>
+						Explore the API
+					</a>
+					<a href="/docs" class={buttonVariants({ size: "lg", variant: "outline" })}>
+						API reference
+					</a>
+				</div>
+			</div>
+			<CodeTabs client:visible tabs={apiTabs} title="POST /v1/send" />
+		</div>
+	</Section>
+
+	<!-- Templates -->
+	<Section id="templates" tone="muted">
+		<div class="grid items-center gap-12 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+			<div class="order-2 lg:order-1">
+				<figure class="bg-ink text-ink-foreground border-ink-border overflow-hidden rounded-xl border">
+					<figcaption class="border-ink-border text-ink-muted border-b px-4 py-2 font-mono text-xs">
+						custom template
+					</figcaption>
+					<div
+						class="overflow-x-auto p-4 font-mono text-[0.8125rem] leading-6 [&_pre]:m-0 [&_pre]:!bg-transparent"
+						set:html={templateHtml}
+					/>
+				</figure>
+			</div>
+			<div class="order-1 lg:order-2">
+				<SectionHeading
+					eyebrow="Templates"
+					title="Fifty layouts. Your own variables."
+					description="Use a built-in layout for onboarding, receipts, security alerts or newsletters, or write your own template with variables and conditionals, with a live preview in the dashboard."
+				/>
+				<div class="mt-8 flex flex-wrap gap-3">
+					<a href="/templates" class={buttonVariants({ size: "lg" })}>
+						Browse templates
+					</a>
+				</div>
+			</div>
+		</div>
+	</Section>
+
+	<!-- Architecture -->
+	<Section id="architecture" tone="ink">
+		<SectionHeading
+			eyebrow="Architecture"
+			title="One Worker. Five Cloudflare services."
+			description="No containers, no mail server, no cluster. The dashboard, the REST API and the email handlers ship as a single Worker that talks to services in your account."
+			class="[&_p]:text-ink-muted [&_p:first-child]:!text-primary"
+		/>
+		<div class="mt-12">
+			<Architecture />
+		</div>
+		<p class="text-ink-muted mt-8 text-sm">
+			Read the{" "}
+			<a href="/cloudflare" class="text-ink-foreground underline underline-offset-4">
+				deployment guide
+			</a>{" "}
+			for bindings and secrets.
+		</p>
+	</Section>
+
+	<!-- Deploy -->
+	<Section id="deploy">
+		<SectionHeading
+			eyebrow="Get started"
+			title="From click to first send in three steps."
+			description="You need a Cloudflare account and a domain on Cloudflare. The deploy button does the provisioning."
+		/>
+		<div class="mt-12">
+			<DeploySteps />
+		</div>
+		<div class="mt-8 flex flex-wrap gap-3">
+			<a href={site.deploy} class={buttonVariants({ size: "xl" })}>
+				<Icon name="lucide:cloud-upload" /> Deploy to Cloudflare
+			</a>
+			<a href="/cloudflare" class={buttonVariants({ size: "xl", variant: "outline" })}>
+				Full deployment guide
+			</a>
+		</div>
+	</Section>
+
+	<!-- Trust -->
+	<Section id="security" tone="muted">
+		<div class="flex flex-wrap items-end justify-between gap-6">
+			<SectionHeading
+				eyebrow="Security and ownership"
+				title="Readable code. Your account. Sensible defaults."
+				description="The full source is on GitHub under the Elastic License 2.0, so you can read exactly what runs against your mail."
+			/>
+			<a href="/security" class={buttonVariants({ size: "lg", variant: "outline" })}>
+				How we handle security
+			</a>
+		</div>
+		<div class="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+			{trust.map((t) => (
+				<Card>
+					<CardContent className="p-6">
+						<Icon name={t.icon} class="text-primary mb-4 size-6" />
+						<h3 class="text-lg font-semibold">{t.title}</h3>
+						<p class="text-muted-foreground mt-2 text-sm leading-6">{t.body}</p>
+					</CardContent>
+				</Card>
+			))}
+		</div>
+	</Section>
+
+	<!-- FAQ -->
+	<Section id="faq" size="narrow">
+		<SectionHeading align="center" eyebrow="FAQ" title="Questions people ask first." />
+		<div class="mt-10">
+			<Faq client:visible items={faq} />
+		</div>
+	</Section>
+
+	<SponsorBand />
+	<CtaBand />
+</Base>
