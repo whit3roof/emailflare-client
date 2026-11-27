@@ -230,6 +230,6 @@ docs                  Architecture deep dives, template guides, and deployment r
 
 ## License
 
-EmailFlare is source-available software licensed under the [Elastic License 2.0](./LICENSE). You can use, modify and self-host it, including for your own business, but you may not offer it to others as a hosted or managed service. Releases published before this change remain available under the MIT License they were released with.
+EmailFlare is source-available software licensed under the [Elastic License 2.0](./LICENSE). You can use, modify and self-host it including for your own business, but you may not offer it to others as a hosted or managed service. Releases published before this change remain available under the MIT License they were released with.
 
 EmailFlare is built by [Devendra Pratap Singh](https://dps.codes) under [0xlabs](https://0xlabs.space). To support it, see [GitHub Sponsors](https://github.com/sponsors/0xdps) or [Buy Me a Coffee](https://buymeacoffee.com/0xdps).
